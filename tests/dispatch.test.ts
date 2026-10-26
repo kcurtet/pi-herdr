@@ -120,10 +120,12 @@ describe("herdr_agents", () => {
 			targetId: "w5",
 			status: "closed",
 			worktree: { repo: "/r", dir: "/d", branch: "hd/dos" },
+			piArgs: ["--no-skills", "--skill", "/a"],
 		});
 		const out = listDispatches({ ...makeDeps({ registry }).deps, registry });
 		const lines = out.split("\n");
 		expect(lines.some((l) => l.includes("uno") && l.includes("live") && l.includes("tab"))).toBe(true);
+		expect(lines.some((l) => l.includes("dos") && l.includes("--no-skills") && l.includes("--skill"))).toBe(true);
 		expect(lines.some((l) => l.includes("dos") && l.includes("closed") && l.includes("workspace") && l.includes("hd/dos"))).toBe(true);
 	});
 });
