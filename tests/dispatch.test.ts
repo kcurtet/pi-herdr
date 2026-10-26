@@ -487,6 +487,36 @@ describe("dispatch — happy path tab", () => {
 	});
 });
 
+describe("dispatch — taskId bajo concurrencia (issue #6)", () => {
+	/** RunFn con barrera: el n-ésimo `agent prompt` espera a que lleguen todos
+	 * los esperados antes de resolver → máximo solape entre dispatch en vuelo. */
+	function barrierRun(routes: Record<string, { code: number; stdout: string; stderr?: string }>, expected: number) {
+		const { run, calls } = fakeRun(routes);
+		let inFlight = 0;
+		const wrapped: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (args.slice(0, 2).join(" ") === "agent prompt") {
+				inFlight++;
+				while (inFlight < expected) await new Promise((r) => setTimeout(r, 5));
+			}
+			return run(file, args, opts);
+		};
+		return { run: wrapped, calls };
+	}
+
+	it("dos dispatch() lanzados concurrentes (Promise.all, registry compartido) → taskIds distintos", async () => {
+		const { run } = barrierRun(routes, 2);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const [a, b] = await Promise.all([
+			dispatch(deps, { task: "revisa el login", name: "uno" }, { HERDR_ENV: "1" }),
+			dispatch(deps, { task: "arregla el pago", name: "dos" }, { HERDR_ENV: "1" }),
+		]);
+		expect(new Set([a.taskId, b.taskId]).size).toBe(2);
+		expect([a.taskId, b.taskId].sort()).toEqual(["hd-1", "hd-2"]);
+		expect(registry.get("uno")!.taskId).not.toBe(registry.get("dos")!.taskId);
+	});
+});
+
 describe("waitArgs (herdr agent wait) — issue #7", () => {
 	it("fase settle: sin --until (herdr matchea idle|done|blocked por defecto)", () => {
 		expect(waitArgs("t", "settle")).toEqual(["agent", "wait", "t"]);
