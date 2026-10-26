@@ -78,7 +78,6 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		"extensions-config",
 		"pi-herdr.json",
 	);
-	const { defaults: configDefaults, warnings: configWarnings } = loadDefaults(configPath);
 
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
@@ -99,9 +98,8 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		settleFor: (rec: DispatchRecord) =>
 			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
 		resourceDirs: defaultResourceDirs(process.env),
-		config: configDefaults,
+		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 	};
-	void configWarnings; // T4: /herdr los muestra
 
 	pi.registerTool({
 		name: "herdr_dispatch",

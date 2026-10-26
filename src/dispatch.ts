@@ -55,8 +55,8 @@ export interface DispatchDeps {
 	settleFor: (rec: DispatchRecord) => SettleHandler;
 	/** Dirs de resolución de skills/extensiones (spec 002). */
 	resourceDirs: ResourceDirs;
-	/** Defaults persistidos (spec 002 D7). */
-	config: DispatchDefaults;
+	/** Defaults persistidos, RECARGADOS en cada dispatch (spec 002 D7/R6). */
+	getConfig: () => DispatchDefaults;
 }
 
 let nextTaskId = 1;
@@ -112,16 +112,18 @@ export async function dispatch(
 	assertHerdrEnv(env);
 
 	// spec 002: param > config > builtin, gate kind!=pi, piArgs tempranos (D4/D7)
-	const effective = mergeInput(input, deps.config);
+	const config = deps.getConfig();
+	const effective = mergeInput(input, config);
 	const resourcesSpecified =
 		input.skills !== undefined || input.extensions !== undefined ||
-		deps.config.skills !== undefined || deps.config.extensions !== undefined;
+		config.skills !== undefined || config.extensions !== undefined;
 	if (effective.kind !== "pi" && resourcesSpecified) {
 		throw new Error(
 			`pi-herdr: skills/extensions solo aplican a kind "pi" (pedido: "${effective.kind}"). Quita esos params o usa kind pi.`,
 		);
 	}
-	const piArgs = buildPiArgs(effective, deps.resourceDirs);
+	// los flags son de la CLI de pi: jamás fluyen a otros kinds (D4)
+	const piArgs = effective.kind === "pi" ? buildPiArgs(effective, deps.resourceDirs) : [];
 
 	const cwd = input.cwd ?? deps.cwd;
 	const name = await resolveName(deps.run, task, input.name);
