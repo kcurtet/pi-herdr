@@ -8,8 +8,10 @@
 import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
 import type { WatchEvent } from "./watch.ts";
-import type { SettleHandler } from "./dispatch.ts";
 import type { WorktreeRef } from "./worktree.ts";
+
+/** Handler de settle por agente: true = re-armar vigilancia, false = cerrar. */
+export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
 export type EmitFn = (content: string, details: Record<string, unknown>) => void;
 
