@@ -15,3 +15,5 @@ Task 1: complete (commit 157664d, tests: npx vitest run → 14/14, typecheck OK)
 Task 2: complete (commit ece041c, tests: npx vitest run → 28/28)
 - Ruling T3: WatchDeps sin emit (la entrega de mensajes vive en settle/T5, que recibe onEvent ya clasificado); fake-herdr.sh PATH shim innecesario — spawnWait inyectable cubre el spawn real con bash en tests.
 Task 3: complete (commit 2cf10c4, tests: npx vitest run → 35/35)
+- Ruling T4: DispatchDeps toma settleFor+spawnWait inyectables (en vez de emit) — el handler de settle se compone en T5; adapter (ev)=>settle(name,ev).
+Task 4: complete (commit e6935fb, tests: npx vitest run → 43/43)
