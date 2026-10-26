@@ -129,6 +129,45 @@ describe("dispatch — gates", () => {
 	});
 });
 
+describe("dispatch — worktree", () => {
+	it("worktree true: crea rama+dir ANTES, tab arranca con cwd=worktree, record lleva worktree", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"git -C": ok("/w/repo"),
+		});
+		// fakeRun enruta por 2 primeros args; git va como file=git → mock aparte:
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+			if (args.includes("rev-parse")) return ok("/w/repo");
+			return ok("");
+			}
+			return run(file, args, opts);
+		};
+		const registry = new Registry();
+		const { deps } = makeDeps({ run: runBoth, registry });
+		const r = await dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" });
+		expect(r.worktreePath).toBe("/w/.hd-worktrees/" + r.agent);
+		expect(gitCalls[0].args).toContain("rev-parse");
+		expect(gitCalls.find((c) => c.args[2] === "worktree")!.args).toContain("-b");
+		const tabCall = calls.find((c) => c.args[1] === "create")!;
+		expect(tabCall.args[tabCall.args.indexOf("--cwd") + 1]).toBe(r.worktreePath);
+		expect(registry.get(r.agent)!.worktree).toEqual({ dir: r.worktreePath!, branch: `hd/${r.agent}` });
+	});
+
+	it("worktree true en cwd no-git: error ANTES de crear topología", async () => {
+		const { run, calls } = fakeRun(routes);
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") return { code: 128, stdout: "", stderr: "not a git repository" };
+			return run(file, args, opts);
+		};
+		const { deps } = makeDeps({ run: runBoth });
+		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
+		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
+	});
+});
+
 describe("dispatch — topologías", () => {
 	it("pane: split derecha del actual, record target = paneId, args exactos", async () => {
 		const { run, calls } = fakeRun({ ...routes, "pane split": ok(fx("pane-split")) });

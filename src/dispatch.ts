@@ -17,6 +17,7 @@ import {
 import { resolveName } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
+import { createWorktree } from "./worktree.ts";
 
 export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
@@ -90,18 +91,25 @@ export async function dispatch(
 	const name = await resolveName(deps.run, task, input.name);
 	const topology = input.topology ?? "tab";
 
+	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
+	let worktree: { dir: string; branch: string } | undefined;
+	if (input.worktree === true) {
+		worktree = await createWorktree(deps.run, { repo: cwd, name });
+	}
+	const agentCwd = worktree?.dir ?? cwd;
+
 	// topología → paneId (dónde vive el agente) + targetId (qué se cierra)
 	let paneId: string;
 	let targetId: string;
 	if (topology === "pane") {
-		paneId = (await paneSplitRight(deps.run, { cwd })).paneId;
+		paneId = (await paneSplitRight(deps.run, { cwd: agentCwd })).paneId;
 		targetId = paneId;
 	} else if (topology === "workspace") {
-		const w = await workspaceCreate(deps.run, { cwd, label: name });
+		const w = await workspaceCreate(deps.run, { cwd: agentCwd, label: name });
 		paneId = w.paneId;
 		targetId = w.workspaceId;
 	} else {
-		const t = await tabCreate(deps.run, { cwd, label: name });
+		const t = await tabCreate(deps.run, { cwd: agentCwd, label: name });
 		paneId = t.paneId;
 		targetId = t.tabId;
 	}
@@ -120,7 +128,8 @@ export async function dispatch(
 		topology,
 		targetId,
 		paneId,
-		cwd,
+		cwd: agentCwd,
+		worktree,
 		keepOpen: input.keepOpen === true,
 		createdAt: Date.now(),
 		status: "live",
@@ -133,5 +142,5 @@ export async function dispatch(
 		(ev) => deps.settleFor(rec)(name, ev),
 	);
 	void handle;
-	return { agent: name, paneId, taskId: rec.taskId };
+	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir };
 }
