@@ -13,3 +13,5 @@ Task 1: complete (commit 157664d, tests: npx vitest run → 14/14, typecheck OK)
 - Ruling: runOk inyecta timeoutMs 15s explícito en cada llamada de control (contrato del seam); agentStart 120s.
 - Ruling T2: 2 tests iniciales mal concebidos corregidos al contrato del plan (slug de 32 chars solo surge de palabras largas; fallback dispatch-N sube desde vivos+1, no el menor libre).
 Task 2: complete (commit ece041c, tests: npx vitest run → 28/28)
+- Ruling T3: WatchDeps sin emit (la entrega de mensajes vive en settle/T5, que recibe onEvent ya clasificado); fake-herdr.sh PATH shim innecesario — spawnWait inyectable cubre el spawn real con bash en tests.
+Task 3: complete (commit 2cf10c4, tests: npx vitest run → 35/35)
