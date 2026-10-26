@@ -314,6 +314,49 @@ describe("dispatch — worktree", () => {
 		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
 		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
 	});
+	it("taskId deriva del registry: restaurado hd-5 → nuevo es hd-6 (sin duplicar)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "previo", taskId: "hd-5", status: "closed" });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.taskId).toBe("hd-6");
+	});
+
+	it("slug que colisiona con record CERRADO del registry → sufijo, historia preservada", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "revisa-login", taskId: "hd-1", status: "closed" });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.agent).toBe("revisa-login-2");
+		expect(registry.get("revisa-login")!.status).toBe("closed"); // historia intacta
+		expect(registry.get("revisa-login-2")!.status).toBe("live");
+	});
+
+	it("union con agentes VIVOS: sufijo que caería sobre un vivo de OTRA sesión → siguiente libre (revisor #1)", async () => {
+		// agentList: "revisa-login-2" VIVO (de otra sesión); registry: "revisa-login" cerrado
+		const { run } = fakeRun({
+			...routes,
+			"agent list": ok('{"result":{"agents":[{"name":"revisa-login-2","agent_status":"idle","pane_id":"w1:p1"}]}}'),
+		});
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "revisa-login", taskId: "hd-1", status: "closed" });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.agent).toBe("revisa-login-3");
+	});
+
+	it("agotamiento de sufijos (-2..-99 ocupados) → error claro, no pisado silencioso", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "revisa-login", status: "closed" });
+		for (let i = 2; i <= 99; i++) {
+			registry.adopt({ ...baseRecord, agent: `revisa-login-${i}`, status: "closed" });
+		}
+		const { deps } = makeDeps({ run, registry });
+		await expect(dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" })).rejects.toThrow(/98 colisiones|nombre libre/);
+	});
 });
 
 describe("dispatch — topologías", () => {
