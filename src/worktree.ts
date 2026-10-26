@@ -55,7 +55,8 @@ export async function cleanupWorktree(
 	const mergedBranches = new Set(
 		merged.stdout
 			.split("\n")
-			.map((l) => l.replace(/^\*?\s*/, "").trim())
+			// '+ ' = rama checked out en otro worktree (la nuestra, al cleanup time); '* ' = actual
+			.map((l) => l.replace(/^[*+]\s*/, "").trim())
 			.filter(Boolean),
 	);
 	// aquí statusText ya es limpio: decideCleanup solo puede dar remove|unmerged
