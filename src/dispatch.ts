@@ -127,6 +127,15 @@ export async function readAgent(deps: DispatchDeps, name: string, lines?: number
 	return agentRead(deps.run, { name, lines });
 }
 
+/** Content de herdr_dispatch: estado del despacho al instante (issue #2: blocked visible). */
+export function dispatchReport(r: DispatchResult): string {
+	const base = `Despachado ${r.agent} en ${r.paneId} (task ${r.taskId}${r.worktreePath ? `, worktree ${r.worktreePath}` : ""}).`;
+	if (r.initialBlocked) {
+		return `${base} ATENCIÓN: el prompt inicial fue rechazado con agent_blocked — el agente espera aprobación o input en su pane; decídelo ahí o con herdr_prompt.`;
+	}
+	return `${base} Recibirás el resultado como evento; sigue con tu trabajo.`;
+}
+
 /** herdr_agents: despachos de la sesión, línea por agente. */
 export function listDispatches(deps: DispatchDeps): string {
 	const recs = deps.registry.list();
