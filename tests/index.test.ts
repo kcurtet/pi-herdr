@@ -121,15 +121,19 @@ describe("factory de la extensión", () => {
 	function fakeApi() {
 		const tools: { name: string; parameters: Record<string, unknown> }[] = [];
 		const handlers: { event: string; fn: (event: unknown, ctx: unknown) => Promise<void> | void }[] = [];
+		const commands: { name: string; description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }[] = [];
 		return {
 			api: {
 				registerTool: (t: { name: string; parameters: Record<string, unknown> }) => tools.push(t),
 				on: (event: string, fn: (event: unknown, ctx: unknown) => Promise<void> | void) => handlers.push({ event, fn }),
+				registerCommand: (name: string, def: { description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }) =>
+					commands.push({ name, ...def }),
 				sendMessage: () => {},
 				appendEntry: () => {},
 			},
 			tools,
 			handlers,
+			commands,
 		};
 	}
 
@@ -147,16 +151,32 @@ describe("factory de la extensión", () => {
 		expect(handlers.map((h) => h.event)).toContain("session_shutdown");
 	});
 
-	it("schema de herdr_dispatch: task requerida, topology enum tab|pane|workspace", () => {
+	it("schema de herdr_dispatch: task requerida, topology enum tab|pane|workspace, skills/extensions unión bool|array", () => {
 		const { api, tools } = fakeApi();
 		extension(api as never);
 		const t = tools.find((x) => x.name === "herdr_dispatch")!;
-		const props = (t.parameters as { properties: Record<string, { type?: string; anyOf?: { const: string }[]; optional?: boolean }> }).properties;
+		const props = (t.parameters as { properties: Record<string, { type?: string; anyOf?: { const?: string; type?: string }[]; optional?: boolean }> }).properties;
 		expect(props.task?.type).toBe("string");
 		expect(props.topology?.anyOf?.map((a) => a.const)).toEqual(["tab", "pane", "workspace"]);
-		expect(props.worktree?.type).toBe("boolean");
-		expect(props.keepOpen?.type).toBe("boolean");
+		const boolOrArray = (p: unknown): boolean => {
+			const anyOf = (p as { anyOf?: { type?: string }[] }).anyOf;
+			const types = (anyOf ?? []).map((x) => x.type).sort();
+			return types.join(",") === "array,boolean";
+		};
+		expect(boolOrArray(props.skills)).toBe(true);
+		expect(boolOrArray(props.extensions)).toBe(true);
 		const required = (t.parameters as { required?: string[] }).required;
 		expect(required).toContain("task");
+	});
+
+	it("registra el comando /herdr con autocompletado", () => {
+		const { api, commands } = fakeApi();
+		extension(api as never);
+		const cmd = commands.find((c) => c.name === "herdr");
+		expect(cmd).toBeDefined();
+		const completions = cmd!.getArgumentCompletions;
+		expect(typeof completions).toBe("function");
+		const items = (completions!("conf") ?? []) as { value: string }[];
+		expect(items.map((i) => i.value)).toEqual(["config "]);
 	});
 });
