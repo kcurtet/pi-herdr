@@ -27,6 +27,10 @@ import {
 	type DispatchRecord,
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
+import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
+import { loadDefaults, saveDefaults } from "./src/config.ts";
+import { makeHerdrCommand } from "./src/command.ts";
+import { join } from "node:path";
 
 const DispatchParams = Type.Object(
 	{
@@ -37,6 +41,8 @@ const DispatchParams = Type.Object(
 		kind: Type.Optional(Type.String({ description: "Kind de agente herdr (pi|claude|codex|gemini|cursor|...). Default pi." })),
 		worktree: Type.Optional(Type.Boolean({ description: "Crear worktree aislado (rama hd/<name>, dir hermano .hd-worktrees/<name>) y arrancar el agente allí. Cleanup conservador al cerrar." })),
 		keepOpen: Type.Optional(Type.Boolean({ description: "No auto-cerrar al settle: el pane queda para más rondas (herdr_prompt/herdr_stop). Default false." })),
+		skills: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], { description: "Skills del agente despachado: false (default) = ninguna (--no-skills); true = herencia nativa completa; [lista] = solo esas (nombres o paths, resueltos antes de crear nada)." })),
+		extensions: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], { description: "Extensiones del agente despachado: false (default) = ninguna (--no-extensions, salvo la integración de estado de herdr); true = herencia nativa; [lista] = solo esas (nombres instalados, paths o builtin:<name>)." })),
 	},
 	{ $id: "HerdrDispatchParams" },
 );
@@ -67,6 +73,11 @@ const StopParams = Type.Object(
 export default function herdrExtension(pi: ExtensionAPI) {
 	const registry = new Registry(pi);
 	const watchers = new Map<string, WatchHandle>();
+	const configPath = join(
+		process.env.PI_HOME ?? join(process.env.HOME ?? "/home/user", ".pi", "agent"),
+		"extensions-config",
+		"pi-herdr.json",
+	);
 
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
@@ -86,6 +97,8 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		arm: armTracked,
 		settleFor: (rec: DispatchRecord) =>
 			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
+		resourceDirs: defaultResourceDirs(process.env),
+		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 	};
 
 	pi.registerTool({
@@ -184,5 +197,21 @@ export default function herdrExtension(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		await shutdownCleanup({ run: localRun, registry, cleanupWorktree });
+	});
+
+	// /herdr — defaults configurables (spec 002 D6)
+	const resourceDirs = defaultResourceDirs(process.env);
+	const cmd = makeHerdrCommand({
+		configPath,
+		load: () => loadDefaults(configPath),
+		save: (d) => saveDefaults(configPath, d),
+		skillNames: () => listSkillNames(resourceDirs),
+		extNames: () => listExtNames(resourceDirs),
+		kinds: ["pi", "claude", "codex", "gemini", "cursor"],
+	});
+	pi.registerCommand("herdr", {
+		description: "Defaults de herdr_dispatch: /herdr [config <key> <valor> | reset [key]]",
+		handler: async (args, ctx) => cmd.handler(args, ctx as unknown as Parameters<typeof cmd.handler>[1]),
+		getArgumentCompletions: (argumentPrefix: string) => cmd.completions(argumentPrefix),
 	});
 }

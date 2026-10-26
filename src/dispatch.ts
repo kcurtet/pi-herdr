@@ -18,6 +18,9 @@ import { resolveName } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree } from "./worktree.ts";
+import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
+import { buildPiArgs } from "./piargs.ts";
+import { mergeInput, type DispatchDefaults } from "./config.ts";
 
 export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
@@ -29,6 +32,8 @@ export interface DispatchInput {
 	kind?: string;
 	worktree?: boolean;
 	keepOpen?: boolean;
+	skills?: boolean | string[];
+	extensions?: boolean | string[];
 }
 
 export interface DispatchResult {
@@ -48,6 +53,10 @@ export interface DispatchDeps {
 	arm: typeof armWatcher;
 	/** Handler de settle para el despacho (T5 inyecta el real). */
 	settleFor: (rec: DispatchRecord) => SettleHandler;
+	/** Dirs de resolución de skills/extensiones (spec 002). */
+	resourceDirs: ResourceDirs;
+	/** Defaults persistidos, RECARGADOS en cada dispatch (spec 002 D7/R6). */
+	getConfig: () => DispatchDefaults;
 }
 
 let nextTaskId = 1;
@@ -87,6 +96,7 @@ export function listDispatches(deps: DispatchDeps): string {
 			const parts = [r.agent, r.status, r.topology, `pane ${r.paneId}`, `task ${r.taskId}`];
 			if (r.worktree) parts.push(`worktree ${r.worktree.branch} (${r.worktree.dir})`);
 			if (r.keepOpen) parts.push("keepOpen");
+			if (r.piArgs && r.piArgs.length > 0) parts.push(`pi: ${r.piArgs.join(" ")}`);
 			return parts.join(" · ");
 		})
 		.join("\n");
@@ -101,9 +111,23 @@ export async function dispatch(
 	if (!task) throw new Error("pi-herdr: `task` es obligatoria (texto completo de la tarea)");
 	assertHerdrEnv(env);
 
+	// spec 002: param > config > builtin, gate kind!=pi, piArgs tempranos (D4/D7)
+	const config = deps.getConfig();
+	const effective = mergeInput(input, config);
+	const resourcesSpecified =
+		input.skills !== undefined || input.extensions !== undefined ||
+		config.skills !== undefined || config.extensions !== undefined;
+	if (effective.kind !== "pi" && resourcesSpecified) {
+		throw new Error(
+			`pi-herdr: skills/extensions solo aplican a kind "pi" (pedido: "${effective.kind}"). Quita esos params o usa kind pi.`,
+		);
+	}
+	// los flags son de la CLI de pi: jamás fluyen a otros kinds (D4)
+	const piArgs = effective.kind === "pi" ? buildPiArgs(effective, deps.resourceDirs) : [];
+
 	const cwd = input.cwd ?? deps.cwd;
 	const name = await resolveName(deps.run, task, input.name);
-	const topology = input.topology ?? "tab";
+	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
 	let worktree: { repo: string; dir: string; branch: string } | undefined;
@@ -128,7 +152,7 @@ export async function dispatch(
 		targetId = t.tabId;
 	}
 	try {
-		await agentStart(deps.run, { name, kind: input.kind ?? "pi", paneId });
+		await agentStart(deps.run, { name, kind: effective.kind, paneId, piArgs });
 		await agentPrompt(deps.run, { name, text: task });
 	} catch (err) {
 		// sin agente corriendo no hay nada que vigilar: deshacer topología y worktree
@@ -151,9 +175,10 @@ export async function dispatch(
 		paneId,
 		cwd: agentCwd,
 		worktree,
-		keepOpen: input.keepOpen === true,
+		keepOpen: effective.keepOpen,
 		createdAt: Date.now(),
 		status: "live",
+		piArgs,
 	};
 	deps.registry.add(rec);
 

@@ -113,8 +113,13 @@ export async function workspaceCreate(
 	return { paneId: r.root_pane.pane_id, workspaceId: r.root_pane.workspace_id };
 }
 
-export async function agentStart(run: RunFn, o: { name: string; kind: string; paneId: string }): Promise<void> {
-	await runOk(run, ["agent", "start", o.name, "--kind", o.kind, "--pane", o.paneId], { timeoutMs: START_TIMEOUT_MS });
+export async function agentStart(
+	run: RunFn,
+	o: { name: string; kind: string; paneId: string; piArgs?: string[] },
+): Promise<void> {
+	const args = ["agent", "start", o.name, "--kind", o.kind, "--pane", o.paneId];
+	if (o.piArgs && o.piArgs.length > 0) args.push("--", ...o.piArgs);
+	await runOk(run, args, { timeoutMs: START_TIMEOUT_MS });
 }
 
 /**

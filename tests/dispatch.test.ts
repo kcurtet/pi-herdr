@@ -1,5 +1,10 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { dispatch, listDispatches, promptAgent, readAgent, type DispatchDeps } from "../src/dispatch.ts";
+import { defaultResourceDirs } from "../src/resources.ts";
+import { saveDefaults, loadDefaults } from "../src/config.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
@@ -7,7 +12,11 @@ import { fakeRun, fx, ok } from "./helpers.ts";
 
 type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
-function makeDeps(overrides?: Partial<DispatchDeps> & { settleDecisions?: boolean[] }): {
+function makeDeps(overrides?: Partial<DispatchDeps> & {
+	settleDecisions?: boolean[];
+	config?: import("../src/config.ts").DispatchDefaults;
+	configPath?: string;
+}): {
 	deps: DispatchDeps;
 	settleEvents: { name: string; ev: WatchEvent }[];
 	armedWith: string[];
@@ -34,6 +43,10 @@ function makeDeps(overrides?: Partial<DispatchDeps> & { settleDecisions?: boolea
 				return { stop() {} };
 			}),
 		settleFor: overrides?.settleFor ?? settleFor,
+		resourceDirs: overrides?.resourceDirs ?? defaultResourceDirs({ HOME: "/no-home" }),
+		getConfig: overrides?.configPath
+			? () => loadDefaults(overrides.configPath!).defaults
+			: () => ({ ...(overrides?.config ?? {}) }),
 	};
 	return { deps, settleEvents, armedWith };
 }
@@ -114,11 +127,102 @@ describe("herdr_agents", () => {
 			targetId: "w5",
 			status: "closed",
 			worktree: { repo: "/r", dir: "/d", branch: "hd/dos" },
+			piArgs: ["--no-skills", "--skill", "/a"],
 		});
 		const out = listDispatches({ ...makeDeps({ registry }).deps, registry });
 		const lines = out.split("\n");
 		expect(lines.some((l) => l.includes("uno") && l.includes("live") && l.includes("tab"))).toBe(true);
+		expect(lines.some((l) => l.includes("dos") && l.includes("--no-skills") && l.includes("--skill"))).toBe(true);
 		expect(lines.some((l) => l.includes("dos") && l.includes("closed") && l.includes("workspace") && l.includes("hd/dos"))).toBe(true);
+	});
+});
+
+describe("dispatch — skills/extensions", () => {
+	function resDirsFixture() {
+		const base = mkdtempSync(join(tmpdir(), "pi-herdr-dsp-"));
+		const d = {
+			piSkills: join(base, "skills"),
+			agentsSkills: join(base, "agents"),
+			extensions: join(base, "ext"),
+			settingsJson: join(base, "settings.json"),
+			stateExt: join(base, "ext", "herdr-agent-state.ts"),
+			npmNodeModules: join(base, "npm"),
+			gitRoot: join(base, "git"),
+		};
+		mkdirSync(join(d.piSkills, "a"), { recursive: true });
+		writeFileSync(join(d.piSkills, "a", "SKILL.md"), "a");
+		mkdirSync(d.extensions, { recursive: true });
+		writeFileSync(d.settingsJson, "{}");
+		writeFileSync(d.stateExt, "// state");
+		return d;
+	}
+
+	it("default: piArgs al agentStart tras -- (--no-skills --no-extensions -e state) y en el record", async () => {
+		const { run, calls } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry, resourceDirs: resDirsFixture() });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		const startCall = calls.find((c) => c.args[1] === "start")!;
+		const dash = startCall.args.indexOf("--");
+		expect(startCall.args.slice(dash + 1)).toEqual(["--no-skills", "--no-extensions", "-e", deps.resourceDirs.stateExt]);
+		expect(registry.get(r.agent)!.piArgs).toEqual(["--no-skills", "--no-extensions", "-e", deps.resourceDirs.stateExt]);
+	});
+
+	it("config skills:true → child SIN --no-skills", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run, resourceDirs: resDirsFixture(), config: { skills: true } });
+		await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		const startCall = calls.find((c) => c.args[1] === "start")!;
+		expect(startCall.args).not.toContain("--no-skills");
+		expect(startCall.args).toContain("--no-extensions");
+	});
+
+	it("param skills lista → --skill resuelto; param gana a config", async () => {
+		const { run, calls } = fakeRun(routes);
+		const rd = resDirsFixture();
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry, resourceDirs: rd, config: { skills: true } });
+		await dispatch(deps, { task: "revisa el login", skills: ["a"] }, { HERDR_ENV: "1" });
+		const startCall = calls.find((c) => c.args[1] === "start")!;
+		expect(startCall.args).toContain("--no-skills");
+		expect(startCall.args).toContain(join(rd.piSkills, "a", "SKILL.md"));
+	});
+
+	it("skill irresoluble → error ANTES de crear tab", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run, resourceDirs: resDirsFixture() });
+		await expect(dispatch(deps, { task: "x", skills: ["zzz"] }, { HERDR_ENV: "1" })).rejects.toThrow(/zzz/);
+		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
+	});
+
+	it("kind!=pi con skills param → error temprano (D4)", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run, resourceDirs: resDirsFixture() });
+		await expect(dispatch(deps, { task: "x", kind: "claude", skills: true }, { HERDR_ENV: "1" })).rejects.toThrow(/pi/i);
+		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
+	});
+	it("kind!=pi SIN params de recursos → CERO flags pi (regresión D4)", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run, resourceDirs: resDirsFixture() });
+		await dispatch(deps, { task: "revisa", kind: "claude" }, { HERDR_ENV: "1" });
+		const startCall = calls.find((c) => c.args[1] === "start")!;
+		expect(startCall.args).not.toContain("--");
+		expect(startCall.args).not.toContain("--no-skills");
+		expect(startCall.args).not.toContain("-e");
+	});
+
+	it("config se recarga en cada dispatch: /herdr config aplica en la MISMA sesión (R6)", async () => {
+		const { run, calls } = fakeRun(routes);
+		const rd = resDirsFixture();
+		const cfgPath = join(dirname(rd.settingsJson), "pi-herdr.json");
+		const { deps } = makeDeps({ run, resourceDirs: rd, configPath: cfgPath });
+		await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		let c1 = calls.find((c) => c.args[1] === "start")!.args;
+		expect(c1).toContain("--no-skills");
+		saveDefaults(cfgPath, { skills: true }); // /herdr config skills true
+		await dispatch(deps, { task: "revisa el login otra" }, { HERDR_ENV: "1" });
+		const c2 = calls.filter((c) => c.args[1] === "start")[1]!.args;
+		expect(c2).not.toContain("--no-skills");
 	});
 });
 
