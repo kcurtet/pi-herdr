@@ -25,7 +25,7 @@ export function slugify(task: string): string {
 }
 
 /** Candidato con sufijo respetando el límite de 32 chars. */
-function withSuffix(base: string, suffix: string): string {
+export function withSuffix(base: string, suffix: string): string {
 	const room = MAX_LEN - suffix.length;
 	return base.slice(0, room) + suffix;
 }

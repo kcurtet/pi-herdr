@@ -314,6 +314,25 @@ describe("dispatch — worktree", () => {
 		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
 		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
 	});
+	it("taskId deriva del registry: restaurado hd-5 → nuevo es hd-6 (sin duplicar)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "previo", taskId: "hd-5", status: "closed" });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.taskId).toBe("hd-6");
+	});
+
+	it("slug que colisiona con record CERRADO del registry → sufijo, historia preservada", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		registry.adopt({ ...baseRecord, agent: "revisa-login", taskId: "hd-1", status: "closed" });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.agent).toBe("revisa-login-2");
+		expect(registry.get("revisa-login")!.status).toBe("closed"); // historia intacta
+		expect(registry.get("revisa-login-2")!.status).toBe("live");
+	});
 });
 
 describe("dispatch — topologías", () => {
