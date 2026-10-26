@@ -314,6 +314,14 @@ describe("dispatch — worktree", () => {
 		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
 		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
 	});
+	it("prompt inicial agent_blocked → DispatchResult.initialBlocked true (observable)", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.agent).toBe("revisa-login");
+		expect(r.initialBlocked).toBe(true);
+	});
 });
 
 describe("dispatch — topologías", () => {

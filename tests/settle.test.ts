@@ -129,6 +129,36 @@ describe("makeSettleHandler — idempotencia", () => {
 	});
 });
 
+describe("makeSettleHandler — cierre con error", () => {
+	it("closeTarget falla → el evento final lo dice y el record queda closed", async () => {
+		const { run } = fakeRun({ "tab close": { code: 1, stdout: "", stderr: "boom-close" } });
+		const registry = new Registry();
+		registry.add({
+			agent: "impl-x",
+			taskId: "hd-1",
+			topology: "tab",
+			targetId: "w4:t4K",
+			paneId: "w4:p4M",
+			cwd: "/repo",
+			keepOpen: false,
+			createdAt: 1,
+			status: "live",
+		});
+		const emitted: { content: string }[] = [];
+		const handler = makeSettleHandler({
+			run,
+			registry,
+			emit: (content) => emitted.push({ content }),
+			cleanupWorktree: async () => ({ removed: true }) as const,
+		});
+		const again = await handler("impl-x", { kind: "settled", state: "idle", output: "ok" });
+		expect(again).toBe(false);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(emitted[0].content).toMatch(/boom-close/);
+		expect(emitted[0].content).toMatch(/close|tab/i);
+	});
+});
+
 describe("makeSettleHandler — cierre por topología", () => {
 	it("record pane cierra pane, record workspace cierra workspace", async () => {
 		const pane = setup({ topology: "pane", targetId: "w4:p5A", paneId: "w4:p5A" });
@@ -146,6 +176,12 @@ describe("formatEvent", () => {
 		const s = formatEvent("impl-x", { kind: "settled", state: "idle", output: "línea 1\nlínea 2" });
 		expect(s.split("\n")[0]).toBe("[impl-x] settled (idle)");
 		expect(s).toContain("línea 1\nlínea 2");
+	});
+	it("settled sin captura → lo dice explícitamente, no parece éxito vacío", () => {
+		const s = formatEvent("impl-x", { kind: "settled", state: "idle", output: "" });
+		expect(s).toMatch(/sin captura de salida/i);
+		const s2 = formatEvent("impl-x", { kind: "settled", state: "done", output: "   \n  " });
+		expect(s2).toMatch(/sin captura de salida/i);
 	});
 	it("blocked y gone legibles", () => {
 		expect(formatEvent("a", { kind: "blocked" })).toMatch(/blocked/);
