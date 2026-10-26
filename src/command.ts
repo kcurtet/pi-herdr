@@ -64,6 +64,26 @@ const VALUE_SPECS: Record<ConfigKey, ValueSpec> = {
 	worktree: { parse: parseBool, options: () => ["true", "false"] },
 };
 
+/** Key de config válido, o notify de error (reset y config comparten). */
+function asConfigKey(raw: string, ctx: CommandCtxLike): ConfigKey | undefined {
+	if ((CONFIG_KEYS as readonly string[]).includes(raw)) return raw as ConfigKey;
+	ctx.ui.notify(`pi-herdr: key desconocida "${raw}" (${CONFIG_KEYS.join(", ")})`, "error");
+	return undefined;
+}
+
+/** Persiste value bajo un key válido y notifica (wizard y config directo comparten). */
+function saveValue(
+	deps: CommandDeps,
+	key: ConfigKey,
+	value: DispatchDefaults[ConfigKey],
+	ctx: CommandCtxLike,
+): void {
+	const current = deps.load().defaults;
+	(current as Record<string, unknown>)[key] = value;
+	deps.save(current);
+	ctx.ui.notify(`pi-herdr: ${key} = ${fmt(value)} (config)`, "info");
+}
+
 function statusText(deps: CommandDeps): string {
 	const { defaults, warnings } = deps.load();
 	const lines = CONFIG_KEYS.map((key) => {
@@ -97,10 +117,7 @@ async function wizard(deps: CommandDeps, ctx: CommandCtxLike): Promise<void> {
 			ctx.ui.notify(`pi-herdr: valor "${value}" no válido para ${k}`, "error");
 			continue;
 		}
-		const current = deps.load().defaults;
-		(current as Record<string, unknown>)[key] = parsed;
-		deps.save(current);
-		ctx.ui.notify(`pi-herdr: ${k} = ${fmt(parsed)} (config)`, "info");
+		saveValue(deps, k, parsed, ctx);
 	}
 }
 
@@ -114,11 +131,9 @@ function makeHandler(deps: CommandDeps) {
 		if (parts[0] === "reset") {
 			const current = deps.load().defaults;
 			if (parts[1]) {
-				if (!(CONFIG_KEYS as readonly string[]).includes(parts[1])) {
-					ctx.ui.notify(`pi-herdr: key desconocida "${parts[1]}" (${CONFIG_KEYS.join(", ")})`, "error");
-					return;
-				}
-				delete current[parts[1] as ConfigKey];
+				const key = asConfigKey(parts[1], ctx);
+				if (!key) return;
+				delete current[key];
 				deps.save(current);
 				ctx.ui.notify(`pi-herdr: ${parts[1]} vuelto a builtin`, "info");
 			} else {
@@ -136,25 +151,19 @@ function makeHandler(deps: CommandDeps) {
 				await wizard(deps, ctx);
 				return;
 			}
-			const key = parts[1]!;
-			if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
-				ctx.ui.notify(`pi-herdr: key desconocida "${key}" (${CONFIG_KEYS.join(", ")})`, "error");
-				return;
-			}
+			const key = asConfigKey(parts[1]!, ctx);
+			if (!key) return;
 			const raw = parts.slice(2).join(" ");
 			if (!raw) {
-				ctx.ui.notify(`pi-herdr: falta el valor. Opciones: ${VALUE_SPECS[key as ConfigKey].options(deps).join(" | ")}`, "error");
+				ctx.ui.notify(`pi-herdr: falta el valor. Opciones: ${VALUE_SPECS[key].options(deps).join(" | ")}`, "error");
 				return;
 			}
-			const parsed = VALUE_SPECS[key as ConfigKey].parse(raw);
+			const parsed = VALUE_SPECS[key].parse(raw);
 			if (parsed === undefined) {
 				ctx.ui.notify(`pi-herdr: valor "${raw}" no válido para ${key}`, "error");
 				return;
 			}
-			const current = deps.load().defaults;
-			(current as Record<string, unknown>)[key] = parsed;
-			deps.save(current);
-			ctx.ui.notify(`pi-herdr: ${key} = ${fmt(parsed)} (config)`, "info");
+			saveValue(deps, key, parsed, ctx);
 			return;
 		}
 		ctx.ui.notify(`pi-herdr: subcomando desconocido "${parts[0]}" (config | reset)`, "error");
