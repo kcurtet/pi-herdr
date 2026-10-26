@@ -108,12 +108,56 @@ describe("armWatcher", () => {
 		expect(events).toEqual([]);
 	});
 
-	it("settle con keepOpen (onEvent=true) re-arma el wait", async () => {
+	it("settle con keepOpen (onEvent=true) re-arma via fase working", async () => {
 		const spawnCount = { n: 0 };
+		const settleStates = ["idle", "idle"];
+		let settleIdx = 0;
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+			spawnCount.n++;
+			const s = phase === "working" ? "working" : settleStates[Math.min(settleIdx++, settleStates.length - 1)]!;
+			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
+		};
 		const { events, onEvent } = collector([true, false]);
-		armWatcher({ run: readRun, spawnWait: waitSeq(["idle", "idle"], spawnCount) }, "t", onEvent);
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length >= 2, "dos settles");
-		expect(spawnCount.n).toBe(2);
+		expect(spawnCount.n).toBe(3);
 		expect(events.filter((e) => e.kind === "settled")).toHaveLength(2);
+	});
+
+	it("keepOpen tras settle: siguiente spawn es fase working (no bucle caliente) — issue #5", async () => {
+		const phases: ("settle" | "working" | undefined)[] = [];
+		let settleIdx = 0;
+		const settleStates = ["idle", "idle"]; // settle 1 → working → settle 2
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+			phases.push(phase);
+			if (phase === "working") {
+				// wait --until working: bloquea hasta que el agente trabaja
+				return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("working")}'; exit 0`]);
+			}
+			const s = settleStates[Math.min(settleIdx, settleStates.length - 1)]!;
+			settleIdx++;
+			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
+		};
+		const { events, onEvent } = collector([true, false]);
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length >= 2, "settle → working → settle");
+		expect(events.map((e) => e.kind)).toEqual(["settled", "settled"]);
+		expect(phases).toEqual(["settle", "working", "settle"]);
+	});
+
+	it("keepOpen con agente que NO vuelve a trabajar: cero eventos extra (anti hot-loop)", async () => {
+		let spawns = 0;
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+			spawns++;
+			if (phase === "working") return spawn("bash", ["-c", "sleep 30"]); // bloquea para siempre
+			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("done")}'; exit 0`]);
+		};
+		const { events, onEvent } = collector([true]);
+		const handle = armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "primer settle");
+		await new Promise((r) => setTimeout(r, 250));
+		expect(events).toHaveLength(1); // sin spam
+		expect(spawns).toBe(2); // settle + working-wait bloqueado
+		handle.stop();
 	});
 });
