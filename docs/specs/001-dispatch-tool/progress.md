@@ -25,3 +25,9 @@ Task 8: complete (commit e0c76c0, tests: 73/73, typecheck OK)
 Task 9: complete (commit eff9198, tests: 80/80, typecheck OK)
 - Ruling T10: API real pi 1.4 appendEntry(customType, data) y entries {type:'custom'} — Registry adaptado (no objeto único). Smoke carga: pi --extension . --model ollama/gemma4 → ok. E2E vivo: dispatch real, settle con output, auto-close verificados.
 Task 10: complete (commit fd472de, tests: 87/87, typecheck OK, smoke carga OK, E2E vivo OK — agente responde-solo-palabra settled 'listo' + auto-close)
+
+## Revisión final (fresco, 2 ejes)
+
+Estándares (7 smells, todos judgement calls → minors diferidos): dup bloque cleanup ×3, settleFor param muerto, void handle, liveNames dup, clump {repo,dir,branch}, middle man readAgent, colocación SettleHandler. Nota: nextTaskId módulo → dup tras resume (sin rotura: eventos por agent name).
+Spec: CRÍTICO worktree repo=rec.cwd=worktree.dir → merged-check siempre true (D5/R6 violadas). Parcial: herdr_stop no para watcher (D1, auto-mitigado por gone). D3 batching descartado por plan (ruling). Orphan worktree en rollback (start/prompt fallan tras crear worktree → invisible). Menores defer: session_start re-appenda entries, settle traga closeTarget fail, agentPrompt inicial ignora retorno blocked.
+Fix pass: (A) worktree lleva repo propio; (B) stopDispatch para watcher antes de cerrar; (C) rollback limpia worktree huérfano + nota en error.
