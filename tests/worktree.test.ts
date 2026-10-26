@@ -1,9 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupWorktree, createWorktree, decideCleanup } from "../src/worktree.ts";
-import type { RunFn } from "../src/herdr.ts";
+import { localRun, type RunFn } from "../src/herdr.ts";
 import { ok } from "./helpers.ts";
 
 interface GitCall {
@@ -95,6 +96,20 @@ describe("cleanupWorktree", () => {
 		expect(calls.find((c) => c.args[2] === "worktree")!.args).toContain("remove");
 	});
 
+	it("rama checked-out en el worktree (prefijo +) cuenta como merged", async () => {
+		// git marca con + las ramas checked out en otro worktree: al momento del
+		// cleanup la nuestra SIEMPRE lo está (el worktree aún existe)
+		const repo = tmpRepo();
+		const dir = join(repo, "..", ".hd-worktrees", "impl-x");
+		const { run } = gitRun({
+			status: ok(""),
+			branch: ok("* main\n+ hd/impl-x\n"),
+			worktree: ok(""),
+		});
+		const r = await cleanupWorktree(run, { repo, dir, branch: "hd/impl-x" });
+		expect(r).toEqual({ removed: true });
+	});
+
 	it("dirty: NO toca git, reporta keep/dirty", async () => {
 		const repo = tmpRepo();
 		const { run, calls } = gitRun({ status: ok(" M a.ts"), branch: ok("* main\n  hd/x") });
@@ -109,5 +124,45 @@ describe("cleanupWorktree", () => {
 		const r = await cleanupWorktree(run, { repo, dir: "/d", branch: "hd/x" });
 		expect(r).toEqual({ removed: false, reason: "unmerged" });
 		expect(calls.filter((c) => (c.args[2] ?? "") === "worktree")).toHaveLength(0);
+	});
+});
+
+describe("integración con git real", () => {
+	function realRepo(): string {
+		const base = mkdtempSync(join(tmpdir(), "pi-herdr-git-"));
+		tmpDirs.push(base);
+		const repo = join(base, "repo");
+		mkdirSync(repo);
+		const gitEnv = {
+			...process.env,
+			GIT_AUTHOR_NAME: "t",
+			GIT_AUTHOR_EMAIL: "t@t",
+			GIT_COMMITTER_NAME: "t",
+			GIT_COMMITTER_EMAIL: "t@t",
+		};
+		execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"], { encoding: "utf8" });
+		execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "init"], { encoding: "utf8", env: gitEnv });
+		return repo;
+	}
+
+	it("createWorktree + cleanupWorktree reales: worktree y rama vacía se eliminan", async () => {
+		const repo = realRepo();
+		const created = await createWorktree(localRun, { repo, name: "e2e-x" });
+		expect(created.repo).toBe(repo);
+		expect(existsSync(created.dir)).toBe(true);
+		// rama SIN commits nuevos: el conservador DEBE poder eliminarla (bug del prefijo +)
+		const r = await cleanupWorktree(localRun, created);
+		expect(r.removed).toBe(true);
+		expect(existsSync(created.dir)).toBe(false);
+		expect(execFileSync("git", ["-C", repo, "branch", "--list", "hd/e2e-x"], { encoding: "utf8" }).trim()).toBe("");
+	});
+
+	it("cleanup con WIP real: conserva el worktree", async () => {
+		const repo = realRepo();
+		const created = await createWorktree(localRun, { repo, name: "wip-x" });
+		writeFileSync(join(created.dir, "wip.txt"), "trabajo sin commitear");
+		const r = await cleanupWorktree(localRun, created);
+		expect(r).toEqual({ removed: false, reason: "dirty" });
+		expect(existsSync(created.dir)).toBe(true);
 	});
 });
