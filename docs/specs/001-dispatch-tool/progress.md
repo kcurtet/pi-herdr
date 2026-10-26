@@ -8,3 +8,6 @@ Rama: feat/dispatch-tool (repo nuevo, sin remote aún).
 
 ## Tareas
 
+
+Task 1: complete (commit 157664d, tests: npx vitest run → 14/14, typecheck OK)
+- Ruling: runOk inyecta timeoutMs 15s explícito en cada llamada de control (contrato del seam); agentStart 120s.
