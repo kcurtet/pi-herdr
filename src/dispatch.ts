@@ -96,6 +96,7 @@ export function listDispatches(deps: DispatchDeps): string {
 			const parts = [r.agent, r.status, r.topology, `pane ${r.paneId}`, `task ${r.taskId}`];
 			if (r.worktree) parts.push(`worktree ${r.worktree.branch} (${r.worktree.dir})`);
 			if (r.keepOpen) parts.push("keepOpen");
+			if (r.piArgs && r.piArgs.length > 0) parts.push(`pi: ${r.piArgs.join(" ")}`);
 			return parts.join(" · ");
 		})
 		.join("\n");

@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultResourceDirs, resolveExtensions, resolveSkills, type ResourceDirs } from "../src/resources.ts";
+import {
+	defaultResourceDirs,
+	listExtNames,
+	listSkillNames,
+	resolveExtensions,
+	resolveSkills,
+	type ResourceDirs,
+} from "../src/resources.ts";
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -122,6 +129,21 @@ describe("resolveExtensions", () => {
 	it("source git sin package.json → throw claro", () => {
 		const { d } = fixtureDirs();
 		expect(() => resolveExtensions(["sinpkg"], d)).toThrow(/package.json/i);
+	});
+});
+
+describe("listados para autocompletado", () => {
+	it("listSkillNames: dirs con SKILL.md y .md sueltos, pi primero sin duplicar", () => {
+		const { d } = fixtureDirs();
+		const names = listSkillNames(d);
+		expect(names).toEqual(["a", "c", "b", "d"]); // a de pi (no la copia de agents), c.md, b, d.md
+	});
+	it("listExtNames: extensions dir + packages (npm/git) + extensions[]", () => {
+		const { d } = fixtureDirs();
+		const names = listExtNames(d);
+		for (const expected of ["loc", "pi-lens", "pi-commit", "pi-monitor", "abs-x"]) {
+			expect(names).toContain(expected);
+		}
 	});
 });
 

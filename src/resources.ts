@@ -4,7 +4,7 @@
  * Todo contra ResourceDirs inyectables: los tests usan árboles temporales y
  * la extensión real usa defaultResourceDirs(process.env).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 export interface ResourceDirs {
@@ -141,4 +141,56 @@ export function resolveSkills(items: string[], d: ResourceDirs): string[] {
 
 export function resolveExtensions(items: string[], d: ResourceDirs): string[] {
 	return items.map((i) => resolveExtensionItem(i, d));
+}
+
+/** Nombres de skills disponibles (autocompletado): pi primero, sin duplicar. */
+export function listSkillNames(d: ResourceDirs): string[] {
+	const names: string[] = [];
+	const seen = new Set<string>();
+	for (const dir of [d.piSkills, d.agentsSkills]) {
+		let entries: string[] = [];
+		try {
+			entries = readdirSync(dir);
+		} catch {
+			continue;
+		}
+		for (const e of entries) {
+			const name = e.endsWith(".md") ? e.slice(0, -3) : existsSync(join(dir, e, "SKILL.md")) ? e : null;
+			if (name && !seen.has(name)) {
+				seen.add(name);
+				names.push(name);
+			}
+		}
+	}
+	return names;
+}
+
+/** Nombres de extensiones instaladas (autocompletado): extensions dir + packages + extensions[]. */
+export function listExtNames(d: ResourceDirs): string[] {
+	const names: string[] = [];
+	const seen = new Set<string>();
+	const push = (n: string): void => {
+		if (!seen.has(n)) {
+			seen.add(n);
+			names.push(n);
+		}
+	};
+	try {
+		for (const e of readdirSync(d.extensions)) {
+			if (e === "herdr-agent-state.ts") continue;
+			push(e.replace(/\.(ts|js)$/, ""));
+		}
+	} catch {
+		// sin dir
+	}
+	const settings = readSettings(d);
+	for (const entry of settings.extensions ?? []) push(basename(entry).replace(/\.(ts|js)$/, ""));
+	for (const src of settings.packages ?? []) {
+		if (src.startsWith("npm:")) push(src.slice(4).split("@")[0]!);
+		else {
+			const parsed = parseGitSource(src);
+			if (parsed) push(parsed.repo);
+		}
+	}
+	return names;
 }
