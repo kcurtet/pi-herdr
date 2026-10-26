@@ -48,6 +48,11 @@ export class Registry {
 		return this.map.get(agent);
 	}
 
+	/** Como add pero SIN persistir: adopción de records restaurados en resume. */
+	adopt(rec: DispatchRecord): void {
+		this.map.set(rec.agent, rec);
+	}
+
 	list(): DispatchRecord[] {
 		return [...this.map.values()];
 	}

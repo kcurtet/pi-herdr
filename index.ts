@@ -180,7 +180,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		try {
 			const branch = ctx.sessionManager.getBranch() as unknown[];
 			const restored = Registry.fromEntries(branch);
-			for (const rec of restored.list()) registry.add(rec);
+			for (const rec of restored.list()) registry.adopt(rec);
 			if (restored.list().length > 0) {
 				const reArmed = await reconcile({ ...deps, emit, cleanupWorktree });
 				if (reArmed.length > 0) {
