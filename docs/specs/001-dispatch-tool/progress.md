@@ -11,3 +11,5 @@ Rama: feat/dispatch-tool (repo nuevo, sin remote aún).
 
 Task 1: complete (commit 157664d, tests: npx vitest run → 14/14, typecheck OK)
 - Ruling: runOk inyecta timeoutMs 15s explícito en cada llamada de control (contrato del seam); agentStart 120s.
+- Ruling T2: 2 tests iniciales mal concebidos corregidos al contrato del plan (slug de 32 chars solo surge de palabras largas; fallback dispatch-N sube desde vivos+1, no el menor libre).
+Task 2: complete (commit ece041c, tests: npx vitest run → 28/28)
