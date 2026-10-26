@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { localRun } from "./src/herdr.ts";
 import {
 	dispatch,
+	dispatchReport,
 	herdrWaitSpawn,
 	listDispatches,
 	promptAgent,
@@ -121,7 +122,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		execute: async (_id, params) => {
 			const result: DispatchResult = await dispatch(deps, params, process.env);
 			return {
-				content: [{ type: "text", text: `Despachado ${result.agent} en ${result.paneId} (task ${result.taskId}${result.worktreePath ? `, worktree ${result.worktreePath}` : ""}). Recibirás el resultado como evento; sigue con tu trabajo.` }],
+				content: [{ type: "text", text: dispatchReport(result) }],
 				details: result,
 			};
 		},
