@@ -5,7 +5,7 @@
  * resume/crash (spec D6/R10).
  */
 import { agentList, closeTarget, type RunFn } from "./herdr.ts";
-import type { SettleHandler } from "./dispatch.ts";
+import type { SettleHandler } from "./settle.ts";
 import type { EmitFn, CleanupWorktreeFn } from "./settle.ts";
 import type { ChildProcess } from "node:child_process";
 import { armWatcher, type WaitPhase } from "./watch.ts";

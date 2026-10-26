@@ -21,8 +21,11 @@ import { createWorktree, cleanupWorktree, type WorktreeRef } from "./worktree.ts
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
+import type { SettleHandler } from "./settle.ts";
 
-export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
+// re-export por compatibilidad: consumers (y tests) históricamente importan
+// el type desde dispatch; la definición canónica vive en settle.ts
+export type { SettleHandler };
 
 export interface DispatchInput {
 	task: string;
