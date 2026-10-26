@@ -9,6 +9,7 @@ import type { SettleHandler } from "./dispatch.ts";
 import type { EmitFn, CleanupWorktreeFn } from "./settle.ts";
 import type { ChildProcess } from "node:child_process";
 import { armWatcher, type WaitPhase } from "./watch.ts";
+import type { WorktreeRef } from "./worktree.ts";
 
 export interface DispatchRecord {
 	agent: string;
@@ -18,7 +19,7 @@ export interface DispatchRecord {
 	targetId: string;
 	paneId: string;
 	cwd: string;
-	worktree?: { repo: string; dir: string; branch: string };
+	worktree?: WorktreeRef;
 	keepOpen: boolean;
 	createdAt: number;
 	status: "live" | "closed";

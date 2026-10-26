@@ -17,7 +17,7 @@ import {
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WaitPhase, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
-import { createWorktree, cleanupWorktree } from "./worktree.ts";
+import { createWorktree, cleanupWorktree, type WorktreeRef } from "./worktree.ts";
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
@@ -170,7 +170,7 @@ export async function dispatch(
 	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
-	let worktree: { repo: string; dir: string; branch: string } | undefined;
+	let worktree: WorktreeRef | undefined;
 	if (input.worktree === true) {
 		worktree = await createWorktree(deps.run, { repo: cwd, name });
 	}

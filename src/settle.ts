@@ -9,11 +9,12 @@ import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
 import type { WatchEvent } from "./watch.ts";
 import type { SettleHandler } from "./dispatch.ts";
+import type { WorktreeRef } from "./worktree.ts";
 
 export type EmitFn = (content: string, details: Record<string, unknown>) => void;
 
 export interface CleanupWorktreeFn {
-	(run: RunFn, o: { repo: string; dir: string; branch: string }): Promise<{ removed: boolean; reason?: string }>;
+	(run: RunFn, o: WorktreeRef): Promise<{ removed: boolean; reason?: string }>;
 }
 
 export interface SettleDeps {
@@ -54,14 +55,11 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 		// cierre definitivo: settled sin keepOpen, o gone
 		let cleanupNote = "";
 		if (rec.worktree) {
-			const report = await deps.cleanupWorktree(deps.run, {
-				repo: rec.worktree.repo,
-				dir: rec.worktree.dir,
-				branch: rec.worktree.branch,
-			});
+			const w = rec.worktree;
+			const report = await deps.cleanupWorktree(deps.run, w);
 			cleanupNote = report.removed
-				? `\n(worktree eliminado: ${rec.worktree.dir})`
-				: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${rec.worktree.dir}, rama ${rec.worktree.branch})`;
+				? `\n(worktree eliminado: ${w.dir})`
+				: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${w.dir}, rama ${w.branch})`;
 		}
 		let closeNote = "";
 		if (ev.kind === "settled") {
