@@ -4,6 +4,12 @@
  * Cada ciclo: spawn de `herdr agent wait <name>` → al salir, clasificar el
  * estado → delegar en onEvent. onEvent devuelve true para re-armar (blocked,
  * keepOpen) y false para terminar. `gone` nunca re-arma.
+ *
+ * El armado inicial arranca en fase "working" (issue #7): confirmar que el
+ * turno arrancó antes de aceptar estados de settle — `herdr agent wait` sin
+ * --until cae al instante si el estado ya es terminal, y durante la latencia
+ * prompt→turno herdr aún reporta idle (settle falso → auto-close mataba al
+ * agente a los ~5s del dispatch).
  */
 import { type ChildProcess } from "node:child_process";
 import { agentRead, type RunFn } from "./herdr.ts";
@@ -115,9 +121,10 @@ export function armWatcher(
 		});
 	};
 
-	cycle();
-	return {
-		stop(): void {
+		// issue #7: fase working inicial — no aceptar settle hasta ver el turno arrancar
+		cycle("working");
+		return {
+				stop(): void {
 			stopped = true;
 			killCurrent();
 		},

@@ -80,10 +80,17 @@ function avoidRegistry(name: string, registry: Registry, live: Set<string>): str
 	throw new Error(`pi-herdr: sin nombre libre para "${name}" tras 98 colisiones — usa name explicito`);
 }
 
-/** spawnWait real: herdr agent wait <name> [--until working], sin timeout (lo mata el watcher). */
+/** Args de `herdr agent wait`. Settle: sin --until (matchea idle|done|blocked por defecto). Working: exige confirmar que el turno arrancó, sin colgar con blocked/done (issue #7). */
+export function waitArgs(name: string, phase: "settle" | "working"): string[] {
+	if (phase === "working") {
+		return ["agent", "wait", name, "--until", "working", "--until", "blocked", "--until", "done"];
+	}
+	return ["agent", "wait", name];
+}
+
+/** spawnWait real: herdr agent wait <name> [args de fase], sin timeout (lo mata el watcher). */
 export function herdrWaitSpawn(name: string, phase: "settle" | "working" = "settle"): ChildProcess {
-	const args = phase === "working" ? ["agent", "wait", name, "--until", "working"] : ["agent", "wait", name];
-	return spawn("herdr", args, { stdio: ["ignore", "pipe", "pipe"] });
+	return spawn("herdr", waitArgs(name, phase), { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */
