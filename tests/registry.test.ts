@@ -26,6 +26,16 @@ function hostStub() {
 	return { appended, host: { appendEntry: (customType: string, data?: unknown) => appended.push({ customType, data }) } };
 }
 
+describe("Registry.adopt (resume)", () => {
+	it("adopta sin re-persistir: cero appendEntry", () => {
+		const { appended, host } = hostStub();
+		const r = new Registry(host);
+		r.adopt(rec({ agent: "viejo", taskId: "hd-7" }));
+		expect(appended).toHaveLength(0);
+		expect(r.get("viejo")!.taskId).toBe("hd-7");
+	});
+});
+
 describe("Registry persistencia", () => {
 	it("add persiste un entry herdr-dispatch-record cuando hay host", () => {
 		const { appended, host } = hostStub();
