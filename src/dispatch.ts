@@ -15,7 +15,7 @@ import {
 	type RunFn,
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
-import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
+import { armWatcher, type WatchEvent, type WaitPhase, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree } from "./worktree.ts";
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
@@ -51,7 +51,7 @@ export interface DispatchDeps {
 	/** cwd por defecto cuando el input no lo trae (cwd de la sesión pi). */
 	cwd: string;
 	/** Spawn de `herdr agent wait` (seam de tests). */
-	spawnWait: (name: string) => ChildProcess;
+	spawnWait: (name: string, phase?: WaitPhase) => ChildProcess;
 	arm: typeof armWatcher;
 	/** Handler de settle para el despacho (T5 inyecta el real). */
 	settleFor: (rec: DispatchRecord) => SettleHandler;
@@ -82,10 +82,28 @@ function avoidRegistry(name: string, registry: Registry, live: Set<string>): str
 	throw new Error(`pi-herdr: sin nombre libre para "${name}" tras 98 colisiones — usa name explicito`);
 }
 
-/** spawnWait real: herdr agent wait <name> [--until working], sin timeout (lo mata el watcher). */
-export function herdrWaitSpawn(name: string, phase: "settle" | "working" = "settle"): ChildProcess {
-	const args = phase === "working" ? ["agent", "wait", name, "--until", "working"] : ["agent", "wait", name];
-	return spawn("herdr", args, { stdio: ["ignore", "pipe", "pipe"] });
+/**
+ * Args de `herdr agent wait` por fase (issue #7). Level-triggered: matchea al
+ * instante si el estado actual ya está en el until-set.
+ * - arm: working|blocked|done — confirmar arranque del turno; done/blocked
+ *   cubren al agente ultra-rápido o bloqueado antes del armado.
+ * - rearm: working|blocked — JAMÁS done/idle: instant-matchearía el estado
+ *   recién reportado y floodearía eventos (finding 1, revisión #7).
+ * - settle: sin --until (herdr matchea idle|done|blocked por defecto).
+ */
+export function waitArgs(name: string, phase: WaitPhase): string[] {
+	if (phase === "arm") {
+		return ["agent", "wait", name, "--until", "working", "--until", "blocked", "--until", "done"];
+	}
+	if (phase === "rearm") {
+		return ["agent", "wait", name, "--until", "working", "--until", "blocked"];
+	}
+	return ["agent", "wait", name];
+}
+
+/** spawnWait real: herdr agent wait <name> [args de fase], sin timeout (lo mata el watcher). */
+export function herdrWaitSpawn(name: string, phase: WaitPhase = "settle"): ChildProcess {
+	return spawn("herdr", waitArgs(name, phase), { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */
