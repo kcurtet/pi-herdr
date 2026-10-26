@@ -78,6 +78,20 @@ export async function readAgent(deps: DispatchDeps, name: string, lines?: number
 	return agentRead(deps.run, { name, lines });
 }
 
+/** herdr_agents: despachos de la sesión, línea por agente. */
+export function listDispatches(deps: DispatchDeps): string {
+	const recs = deps.registry.list();
+	if (recs.length === 0) return "Sin despachos en esta sesión.";
+	return recs
+		.map((r) => {
+			const parts = [r.agent, r.status, r.topology, `pane ${r.paneId}`, `task ${r.taskId}`];
+			if (r.worktree) parts.push(`worktree ${r.worktree.branch} (${r.worktree.dir})`);
+			if (r.keepOpen) parts.push("keepOpen");
+			return parts.join(" · ");
+		})
+		.join("\n");
+}
+
 export async function dispatch(
 	deps: DispatchDeps,
 	input: DispatchInput,
