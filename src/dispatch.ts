@@ -14,7 +14,7 @@ import {
 	workspaceCreate,
 	type RunFn,
 } from "./herdr.ts";
-import { resolveName, withSuffix } from "./slug.ts";
+import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree } from "./worktree.ts";
@@ -69,14 +69,15 @@ function nextTaskId(registry: Registry): string {
 	return `hd-${max + 1}`;
 }
 
-/** Evita pisar records previos del registry (cerrados incluidos): sufijo -2..-9 (issue #1). */
-function avoidRegistry(name: string, registry: Registry): string {
-	if (!registry.get(name)) return name;
-	for (let i = 2; i <= 9; i++) {
+/** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
+function avoidRegistry(name: string, registry: Registry, live: Set<string>): string {
+	const taken = (n: string): boolean => registry.get(n) !== undefined || live.has(n);
+	if (!taken(name)) return name;
+	for (let i = 2; i <= 99; i++) {
 		const cand = withSuffix(name, `-${i}`);
-		if (!registry.get(cand)) return cand;
+		if (!taken(cand)) return cand;
 	}
-	return name;
+	throw new Error(`pi-herdr: sin nombre libre para "${name}" tras 98 colisiones — usa name explicito`);
 }
 
 /** spawnWait real: herdr agent wait <name>, sin timeout (lo mata el watcher). */
@@ -145,7 +146,7 @@ export async function dispatch(
 
 	const cwd = input.cwd ?? deps.cwd;
 	let name = await resolveName(deps.run, task, input.name);
-	name = avoidRegistry(name, deps.registry);
+	name = avoidRegistry(name, deps.registry, await liveNames(deps.run));
 	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
