@@ -54,11 +54,11 @@ describe("decideCleanup (pura)", () => {
 });
 
 describe("createWorktree", () => {
-	it("rama hd/<name> desde HEAD en <parent>/.hd-worktrees/<name>", async () => {
+	it("rama hd/<name> desde HEAD en <parent>/.hd-worktrees/<name>; devuelve repo toplevel", async () => {
 		const repo = tmpRepo();
 		const { run, calls } = gitRun({ "rev-parse": ok(repo), worktree: ok("") });
 		const r = await createWorktree(run, { repo, name: "impl-x" });
-		expect(r).toEqual({ dir: join(repo, "..", ".hd-worktrees", "impl-x"), branch: "hd/impl-x" });
+		expect(r).toEqual({ repo, dir: join(repo, "..", ".hd-worktrees", "impl-x"), branch: "hd/impl-x" });
 		const add = calls.find((c) => c.args[2] === "worktree")!;
 		expect(add.args).toEqual(["-C", repo, "worktree", "add", "-b", "hd/impl-x", r.dir]);
 	});

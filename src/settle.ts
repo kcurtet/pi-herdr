@@ -55,7 +55,7 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 		let cleanupNote = "";
 		if (rec.worktree) {
 			const report = await deps.cleanupWorktree(deps.run, {
-				repo: rec.cwd,
+				repo: rec.worktree.repo,
 				dir: rec.worktree.dir,
 				branch: rec.worktree.branch,
 			});

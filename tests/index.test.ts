@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Registry, shutdownCleanup, stopAgent, type DispatchRecord } from "../src/registry.ts";
+import { Registry, shutdownCleanup, stopAgent, stopDispatch, type DispatchRecord } from "../src/registry.ts";
 import extension from "../index.ts";
 import { fakeRun, ok } from "./helpers.ts";
 
@@ -31,7 +31,7 @@ describe("shutdownCleanup", () => {
 		const { run, calls } = fakeRun(closeRoutes);
 		const registry = new Registry();
 		registry.add(rec());
-		registry.add(rec({ agent: "dos", topology: "pane", targetId: "w4:p5A", worktree: { dir: "/d", branch: "hd/dos" } }));
+		registry.add(rec({ agent: "dos", topology: "pane", targetId: "w4:p5A", worktree: { repo: "/r", dir: "/d", branch: "hd/dos" } }));
 		const cleanups: string[] = [];
 		await shutdownCleanup({
 			run,
@@ -78,7 +78,7 @@ describe("stopAgent (herdr_stop)", () => {
 	it("live: cleanup worktree + close + markClosed", async () => {
 		const { run, calls } = fakeRun(closeRoutes);
 		const registry = new Registry();
-		registry.add(rec({ worktree: { dir: "/d", branch: "hd/impl-x" } }));
+		registry.add(rec({ worktree: { repo: "/r", dir: "/d", branch: "hd/impl-x" } }));
 		const cleanups: string[] = [];
 		await stopAgent(
 			{ run, registry, cleanupWorktree: async (_r, o) => { cleanups.push(o.dir); return { removed: true }; } },
@@ -96,6 +96,24 @@ describe("stopAgent (herdr_stop)", () => {
 		registry.add(rec());
 		registry.markClosed("impl-x");
 		await expect(stopAgent({ run, registry, cleanupWorktree: noCleanup }, "impl-x")).rejects.toThrow(/cerrado/);
+	});
+});
+
+describe("stopDispatch (herdr_stop wiring)", () => {
+	it("para el watcher ANTES de cerrar, con el mismo registro de despacho", async () => {
+		const order: string[] = [];
+		const watchers = new Map<string, { stop(): void }>();
+		watchers.set("impl-x", { stop() { order.push("watcher"); } });
+		const registry = new Registry();
+		registry.add(rec());
+		const run: import("../src/herdr.ts").RunFn = async (_f, args) => {
+			if (args[1] === "close") { order.push("close"); return { code: 0, stdout: "{\"result\":{\"type\":\"ok\"}}", stderr: "" }; }
+			return { code: 1, stdout: "", stderr: "unmocked" };
+		};
+		const msg = await stopDispatch({ run, registry, cleanupWorktree: noCleanup, watchers }, "impl-x");
+		expect(order).toEqual(["watcher", "close"]);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(msg).toMatch(/impl-x/);
 	});
 });
 

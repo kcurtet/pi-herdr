@@ -17,7 +17,7 @@ import {
 import { resolveName } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
-import { createWorktree } from "./worktree.ts";
+import { createWorktree, cleanupWorktree } from "./worktree.ts";
 
 export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
@@ -106,7 +106,7 @@ export async function dispatch(
 	const topology = input.topology ?? "tab";
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
-	let worktree: { dir: string; branch: string } | undefined;
+	let worktree: { repo: string; dir: string; branch: string } | undefined;
 	if (input.worktree === true) {
 		worktree = await createWorktree(deps.run, { repo: cwd, name });
 	}
@@ -131,9 +131,16 @@ export async function dispatch(
 		await agentStart(deps.run, { name, kind: input.kind ?? "pi", paneId });
 		await agentPrompt(deps.run, { name, text: task });
 	} catch (err) {
-		// sin agente corriendo no hay nada que vigilar: deshacer la topología
+		// sin agente corriendo no hay nada que vigilar: deshacer topología y worktree
 		await closeTarget(deps.run, { kind: topology, id: targetId }).catch(() => undefined);
-		throw err;
+		let note = "";
+		if (worktree) {
+			const report = await cleanupWorktree(deps.run, worktree).catch(() => ({ removed: false, reason: "cleanup falló" }));
+			note = report.removed
+				? ` (worktree ${worktree.dir} eliminado en rollback)`
+				: ` (worktree ${worktree.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
+		}
+		throw new Error(`${(err as Error).message}${note}`);
 	}
 
 	const rec: DispatchRecord = {

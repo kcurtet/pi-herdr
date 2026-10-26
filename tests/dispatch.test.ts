@@ -113,7 +113,7 @@ describe("herdr_agents", () => {
 			topology: "workspace",
 			targetId: "w5",
 			status: "closed",
-			worktree: { dir: "/d", branch: "hd/dos" },
+			worktree: { repo: "/r", dir: "/d", branch: "hd/dos" },
 		});
 		const out = listDispatches({ ...makeDeps({ registry }).deps, registry });
 		const lines = out.split("\n");
@@ -172,7 +172,32 @@ describe("dispatch — worktree", () => {
 		expect(gitCalls.find((c) => c.args[2] === "worktree")!.args).toContain("-b");
 		const tabCall = calls.find((c) => c.args[1] === "create")!;
 		expect(tabCall.args[tabCall.args.indexOf("--cwd") + 1]).toBe(r.worktreePath);
-		expect(registry.get(r.agent)!.worktree).toEqual({ dir: r.worktreePath!, branch: `hd/${r.agent}` });
+		expect(registry.get(r.agent)!.worktree).toEqual({ repo: "/w/repo", dir: r.worktreePath!, branch: `hd/${r.agent}` });
+	});
+
+	it("worktree y fallo en agent start: cleanup del huérfano + error lo menciona", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent start": { code: 1, stdout: "", stderr: "start-boom" },
+		});
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+				if (args.includes("rev-parse")) return ok("/w/repo");
+				if (args[2] === "status") return ok("");
+				if (args[2] === "branch") return ok("* main\n  hd/revisa-login\n");
+				return ok(""); // worktree add / worktree remove / branch -d
+			}
+			return run(file, args, opts);
+		};
+		const { deps } = makeDeps({ run: runBoth });
+		const agent = "revisa-login";
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/start-boom[\s\S]*worktree/i,
+		);
+		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(true);
+		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1); // rollback del tab
 	});
 
 	it("worktree true en cwd no-git: error ANTES de crear topología", async () => {
