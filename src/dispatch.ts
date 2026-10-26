@@ -15,7 +15,7 @@ import {
 	type RunFn,
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
-import { armWatcher, type WatchEvent, type WaitPhase, type WatchHandle } from "./watch.ts";
+import { armWatcher, type WatchEvent, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree, type WorktreeRef } from "./worktree.ts";
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
@@ -223,11 +223,10 @@ export async function dispatch(
 	};
 	deps.registry.add(rec);
 
-	const handle: WatchHandle = deps.arm(
+	deps.arm(
 		{ run: deps.run, spawnWait: deps.spawnWait },
 		name,
 		(ev) => deps.settleFor(rec)(name, ev),
 	);
-	void handle;
 	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, initialBlocked: promptResult === "blocked" || undefined };
 }
