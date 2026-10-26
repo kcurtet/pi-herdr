@@ -4,3 +4,4 @@
 Rama: feat/agent-resources
 
 ## Tareas
+Task 1: complete (commit ea3a94a, tests 104/104, tsc 0)
