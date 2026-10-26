@@ -28,7 +28,7 @@ export function formatEvent(name: string, ev: WatchEvent): string {
 		case "blocked":
 			return `[${name}] blocked — el agente espera aprobación o input. Decídelo en su pane (visible en herdr) o responde con herdr_prompt.`;
 		case "settled":
-			return `[${name}] settled (${ev.state})\n\n${ev.output}`;
+			return `[${name}] settled (${ev.state})\n\n${ev.output.trim() === "" ? "(sin captura de salida — léelo con herdr_read si sigue vivo)" : ev.output}`;
 		case "gone":
 			return `[${name}] gone — ${ev.reason}`;
 	}
@@ -63,16 +63,18 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 				? `\n(worktree eliminado: ${rec.worktree.dir})`
 				: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${rec.worktree.dir}, rama ${rec.worktree.branch})`;
 		}
-		deps.emit(formatEvent(name, ev) + cleanupNote, {
+		let closeNote = "";
+		if (ev.kind === "settled") {
+			await closeTarget(deps.run, { kind: rec.topology, id: rec.targetId }).catch((err) => {
+				closeNote = `\n⚠ close de ${rec.topology} ${rec.targetId} falló: ${(err as Error).message} — revisa la tab a mano`;
+			});
+		}
+		deps.registry.markClosed(name);
+		deps.emit(formatEvent(name, ev) + cleanupNote + closeNote, {
 			customType: "herdr-dispatch-event",
 			agent: name,
 			kind: ev.kind,
 		});
-
-		if (ev.kind === "settled") {
-			await closeTarget(deps.run, { kind: rec.topology, id: rec.targetId }).catch(() => undefined);
-		}
-		deps.registry.markClosed(name);
 		return false;
 	};
 }

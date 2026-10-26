@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { dispatch, listDispatches, promptAgent, readAgent, waitArgs, type DispatchDeps } from "../src/dispatch.ts";
+import { dispatch, dispatchReport, listDispatches, promptAgent, readAgent, waitArgs, type DispatchDeps, type DispatchResult } from "../src/dispatch.ts";
 import { defaultResourceDirs } from "../src/resources.ts";
 import { saveDefaults, loadDefaults } from "../src/config.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
@@ -314,6 +314,23 @@ describe("dispatch — worktree", () => {
 		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
 		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
 	});
+
+	it("prompt inicial agent_blocked → DispatchResult.initialBlocked true y el content de herdr_dispatch lo menciona", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.agent).toBe("revisa-login");
+		expect(r.initialBlocked).toBe(true);
+		expect(dispatchReport(r)).toMatch(/blocked/i);
+	});
+
+	it("dispatchReport sin blocked: mensaje normal sin mención a aprobación", () => {
+		const normal: DispatchResult = { agent: "impl-x", paneId: "w4:p4M", taskId: "hd-1" };
+		expect(dispatchReport(normal)).toMatch(/Despachado impl-x/);
+		expect(dispatchReport(normal)).not.toMatch(/blocked/i);
+	});
+
 	it("taskId deriva del registry: restaurado hd-5 → nuevo es hd-6 (sin duplicar)", async () => {
 		const { run } = fakeRun(routes);
 		const registry = new Registry();
