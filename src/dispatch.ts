@@ -5,6 +5,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
 	agentPrompt,
+	agentRead,
 	agentStart,
 	assertHerdrEnv,
 	closeTarget,
@@ -51,6 +52,27 @@ let nextTaskId = 1;
 /** spawnWait real: herdr agent wait <name>, sin timeout (lo mata el watcher). */
 export function herdrWaitSpawn(name: string): ChildProcess {
 	return spawn("herdr", ["agent", "wait", name], { stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */
+export async function promptAgent(deps: DispatchDeps, name: string, text: string): Promise<string> {
+	const rec = deps.registry.get(name);
+	if (!rec) {
+		throw new Error(`pi-herdr: despacho "${name}" no encontrado en esta sesión. Usa herdr_agents para listar los vivos.`);
+	}
+	if (rec.status === "closed") {
+		throw new Error(`pi-herdr: "${name}" ya está cerrado. Lanza un herdr_dispatch nuevo para otra tarea.`);
+	}
+	const r = await agentPrompt(deps.run, { name, text });
+	if (r === "blocked") {
+		return `El agente ${name} está bloqueado esperando aprobación o input: decide en su pane (visible en herdr) y vuelve a promptear después.`;
+	}
+	return `Prompt enviado a ${name}. El watcher activo notificará el próximo settle; no re-armes nada.`;
+}
+
+/** herdr_read: salida del agente (recent-unwrapped). */
+export async function readAgent(deps: DispatchDeps, name: string, lines?: number): Promise<string> {
+	return agentRead(deps.run, { name, lines });
 }
 
 export async function dispatch(
