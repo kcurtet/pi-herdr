@@ -36,6 +36,43 @@ describe("Registry.adopt (resume)", () => {
 	});
 });
 
+describe("Registry.nextTaskId — asignación atómica (issue #6)", () => {
+	// Modela el interleave exacto de dos dispatch() concurrentes:
+	// [A asigna] [B asigna] ... [A add] [B add]. Con check-then-act puro (scan
+	// sin reserva) ambos verían el mismo máx y devolverían el MISMO id.
+	it("dos asignaciones sin add intermedio → ids distintos (reserva monótona)", () => {
+		const r = new Registry();
+		const a = r.nextTaskId();
+		const b = r.nextTaskId();
+		expect(new Set([a, b]).size).toBe(2);
+		expect([a, b]).toEqual(["hd-1", "hd-2"]);
+	});
+
+	it("asignación con await intercalado antes del add → ids distintos", async () => {
+		const r = new Registry();
+		const a = r.nextTaskId();
+		await new Promise((res) => setTimeout(res, 0)); // ventana TOCTOU: el add de A aún no cayó
+		const b = r.nextTaskId();
+		expect(a).not.toBe(b);
+	});
+
+	it("considera los records restaurados: adopt hd-5 → siguiente es hd-6 (issue #1)", () => {
+		const r = Registry.fromEntries([
+			{ type: "custom", customType: "herdr-dispatch-record", data: rec({ agent: "previo", taskId: "hd-5", status: "closed" }) },
+		]);
+		expect(r.nextTaskId()).toBe("hd-6");
+	});
+
+	it("la reserva nunca retrocede: tras add real, siguiente continúa sobre el máximo emitido", () => {
+		const r = new Registry();
+		const a = r.nextTaskId(); // hd-1, reservado
+		r.add(rec({ agent: "otro", taskId: "hd-9" })); // restaurado con id mayor
+		const b = r.nextTaskId();
+		expect(a).toBe("hd-1");
+		expect(b).toBe("hd-10");
+	});
+});
+
 describe("Registry persistencia", () => {
 	it("add persiste un entry herdr-dispatch-record cuando hay host", () => {
 		const { appended, host } = hostStub();

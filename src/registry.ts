@@ -36,8 +36,29 @@ const CLOSE_TYPE = "herdr-dispatch-close";
 
 export class Registry {
 	private readonly map = new Map<string, DispatchRecord>();
+	/** Máximo taskId EMITIDO (reserva): recuerda ids asignados cuyo record aún no
+	 * se ha añadido — cierra la ventana TOCTOU asignar→add (issue #6). */
+	private issuedTaskId = 0;
 
 	constructor(private readonly host?: RegistryHost) {}
+
+	/**
+	 * Próximo taskId, atómico respecto a add (issue #6): scan de los records
+	 * (incluye restaurados, issue #1) y reserva del contador en el MISMO bloque
+	 * síncrono. La reserva persiste aunque el add llegue después (incluso tras
+	 * awaits futuros en dispatch), así dos dispatch concurrentes jamás reciben
+	 * el mismo id. Los ids solo garantizan unicidad: un dispatch que falle tras
+	 * asignar deja un hueco, no un duplicado.
+	 */
+	nextTaskId(): string {
+		let max = this.issuedTaskId;
+		for (const r of this.map.values()) {
+			const m = /^hd-(\d+)$/.exec(r.taskId);
+			if (m) max = Math.max(max, Number(m[1]));
+		}
+		this.issuedTaskId = max + 1;
+		return `hd-${max + 1}`;
+	}
 
 	add(rec: DispatchRecord): void {
 		this.map.set(rec.agent, rec);

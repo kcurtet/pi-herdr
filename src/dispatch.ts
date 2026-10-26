@@ -59,16 +59,6 @@ export interface DispatchDeps {
 	getConfig: () => DispatchDefaults;
 }
 
-/** taskId único considerando los records restaurados (issue #1). */
-function nextTaskId(registry: Registry): string {
-	let max = 0;
-	for (const r of registry.list()) {
-		const m = /^hd-(\d+)$/.exec(r.taskId);
-		if (m) max = Math.max(max, Number(m[1]));
-	}
-	return `hd-${max + 1}`;
-}
-
 /** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
 function avoidRegistry(name: string, registry: Registry, live: Set<string>): string {
 	const taken = (n: string): boolean => registry.get(n) !== undefined || live.has(n);
@@ -208,7 +198,7 @@ export async function dispatch(
 
 	const rec: DispatchRecord = {
 		agent: name,
-		taskId: nextTaskId(deps.registry),
+		taskId: deps.registry.nextTaskId(),
 		topology,
 		targetId,
 		paneId,
