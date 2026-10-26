@@ -3,20 +3,15 @@
  * interactivo y autocompletado. Patrón turnkit.
  */
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import type { DispatchDefaults } from "./config.ts";
+import { BUILTIN as DEFAULTS, TOPOLOGIES, type DispatchDefaults } from "./config.ts";
 
 export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
-const TOPOLOGIES = ["tab", "pane", "workspace"] as const;
-const BUILTIN: Record<ConfigKey, string> = {
-	skills: "false",
-	extensions: "false",
-	topology: "tab",
-	kind: "pi",
-	keepOpen: "false",
-	worktree: "false",
-};
+/** Display del builtin por key, DERIVADO de config.ts (única fuente de verdad). */
+const BUILTIN: Record<ConfigKey, string> = Object.fromEntries(
+	CONFIG_KEYS.map((key) => [key, fmt(DEFAULTS[key])]),
+) as Record<ConfigKey, string>;
 
 export interface CommandDeps {
 	configPath: string;
