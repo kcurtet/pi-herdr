@@ -128,6 +128,18 @@ describe("makeSettleHandler — idempotencia", () => {
 	});
 });
 
+describe("makeSettleHandler — cierre por topología", () => {
+	it("record pane cierra pane, record workspace cierra workspace", async () => {
+		const pane = setup({ topology: "pane", targetId: "w4:p5A", paneId: "w4:p5A" });
+		await pane.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
+		expect(pane.calls[0].args).toEqual(["pane", "close", "w4:p5A"]);
+
+		const ws = setup({ topology: "workspace", targetId: "w5", paneId: "w5:p1" });
+		await ws.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
+		expect(ws.calls[0].args).toEqual(["workspace", "close", "w5"]);
+	});
+});
+
 describe("formatEvent", () => {
 	it("settled: primera línea con nombre y estado, cuerpo con output", () => {
 		const s = formatEvent("impl-x", { kind: "settled", state: "idle", output: "línea 1\nlínea 2" });

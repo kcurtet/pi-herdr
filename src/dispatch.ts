@@ -9,7 +9,9 @@ import {
 	agentStart,
 	assertHerdrEnv,
 	closeTarget,
+	paneSplitRight,
 	tabCreate,
+	workspaceCreate,
 	type RunFn,
 } from "./herdr.ts";
 import { resolveName } from "./slug.ts";
@@ -88,14 +90,27 @@ export async function dispatch(
 	const name = await resolveName(deps.run, task, input.name);
 	const topology = input.topology ?? "tab";
 
-	// T4: rama tab. pane/workspace llegan en T7, worktree en T8.
-	const t = await tabCreate(deps.run, { cwd, label: name });
+	// topología → paneId (dónde vive el agente) + targetId (qué se cierra)
+	let paneId: string;
+	let targetId: string;
+	if (topology === "pane") {
+		paneId = (await paneSplitRight(deps.run, { cwd })).paneId;
+		targetId = paneId;
+	} else if (topology === "workspace") {
+		const w = await workspaceCreate(deps.run, { cwd, label: name });
+		paneId = w.paneId;
+		targetId = w.workspaceId;
+	} else {
+		const t = await tabCreate(deps.run, { cwd, label: name });
+		paneId = t.paneId;
+		targetId = t.tabId;
+	}
 	try {
-		await agentStart(deps.run, { name, kind: input.kind ?? "pi", paneId: t.paneId });
+		await agentStart(deps.run, { name, kind: input.kind ?? "pi", paneId });
 		await agentPrompt(deps.run, { name, text: task });
 	} catch (err) {
 		// sin agente corriendo no hay nada que vigilar: deshacer la topología
-		await closeTarget(deps.run, { kind: "tab", id: t.tabId }).catch(() => undefined);
+		await closeTarget(deps.run, { kind: topology, id: targetId }).catch(() => undefined);
 		throw err;
 	}
 
@@ -103,8 +118,8 @@ export async function dispatch(
 		agent: name,
 		taskId: `hd-${nextTaskId++}`,
 		topology,
-		targetId: t.tabId,
-		paneId: t.paneId,
+		targetId,
+		paneId,
 		cwd,
 		keepOpen: input.keepOpen === true,
 		createdAt: Date.now(),
@@ -118,5 +133,5 @@ export async function dispatch(
 		(ev) => deps.settleFor(rec)(name, ev),
 	);
 	void handle;
-	return { agent: name, paneId: t.paneId, taskId: rec.taskId };
+	return { agent: name, paneId, taskId: rec.taskId };
 }
