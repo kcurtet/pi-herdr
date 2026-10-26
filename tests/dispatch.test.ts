@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dispatch, promptAgent, readAgent, type DispatchDeps } from "../src/dispatch.ts";
+import { dispatch, listDispatches, promptAgent, readAgent, type DispatchDeps } from "../src/dispatch.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
@@ -100,6 +100,25 @@ describe("herdr_read", () => {
 		const out = await readAgent(deps, "impl-x");
 		expect(out).toBe("texto del agente");
 		expect(calls[0].args).toEqual(["agent", "read", "impl-x", "--source", "recent-unwrapped", "--lines", "200"]);
+	});
+});
+
+describe("herdr_agents", () => {
+	it("lista los despachos del registry en líneas legibles", () => {
+		const registry = new Registry();
+		registry.add({ ...baseRecord, agent: "uno", status: "live" });
+		registry.add({
+			...baseRecord,
+			agent: "dos",
+			topology: "workspace",
+			targetId: "w5",
+			status: "closed",
+			worktree: { dir: "/d", branch: "hd/dos" },
+		});
+		const out = listDispatches({ ...makeDeps({ registry }).deps, registry });
+		const lines = out.split("\n");
+		expect(lines.some((l) => l.includes("uno") && l.includes("live") && l.includes("tab"))).toBe(true);
+		expect(lines.some((l) => l.includes("dos") && l.includes("closed") && l.includes("workspace") && l.includes("hd/dos"))).toBe(true);
 	});
 });
 
