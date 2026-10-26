@@ -61,9 +61,10 @@ export interface DispatchDeps {
 
 let nextTaskId = 1;
 
-/** spawnWait real: herdr agent wait <name>, sin timeout (lo mata el watcher). */
-export function herdrWaitSpawn(name: string): ChildProcess {
-	return spawn("herdr", ["agent", "wait", name], { stdio: ["ignore", "pipe", "pipe"] });
+/** spawnWait real: herdr agent wait <name> [--until working], sin timeout (lo mata el watcher). */
+export function herdrWaitSpawn(name: string, phase: "settle" | "working" = "settle"): ChildProcess {
+	const args = phase === "working" ? ["agent", "wait", name, "--until", "working"] : ["agent", "wait", name];
+	return spawn("herdr", args, { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */

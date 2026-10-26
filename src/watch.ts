@@ -15,7 +15,7 @@ export type WatchEvent =
 
 export interface WatchDeps {
 	run: RunFn;
-	spawnWait: (name: string) => ChildProcess;
+	spawnWait: (name: string, phase?: "settle" | "working") => ChildProcess;
 }
 
 export interface WatchHandle {
@@ -49,12 +49,18 @@ export function armWatcher(
 			stopped = true;
 			return;
 		}
-		cycle();
+		// keepOpen tras settle: esperar a que el agente VUELVA a trabajar antes del
+		// ciclo normal — si no, wait retorna al instante y buclea en caliente (issue #5)
+		if (ev.kind === "settled") {
+			cycle("working");
+		} else {
+			cycle();
+		}
 	};
 
-	const cycle = (): void => {
+	const cycle = (phase: "settle" | "working" = "settle"): void => {
 		if (stopped) return;
-		const child = deps.spawnWait(name);
+		const child = deps.spawnWait(name, phase);
 		current = child;
 		let stdout = "";
 		child.stdout?.setEncoding("utf8");
@@ -98,6 +104,11 @@ export function armWatcher(
 					}
 					await deliver({ kind: "settled", state: status, output });
 				})();
+				return;
+			}
+			if (status === "working" && phase === "working") {
+				// el agente volvió a trabajar: entrar al ciclo normal de settle
+				cycle();
 				return;
 			}
 			void deliver({ kind: "gone", reason: `estado no reconocido tras wait: ${status}` });
