@@ -4,9 +4,26 @@
  * Cada ciclo: spawn de `herdr agent wait <name>` → al salir, clasificar el
  * estado → delegar en onEvent. onEvent devuelve true para re-armar (blocked,
  * keepOpen) y false para terminar. `gone` nunca re-arma.
+ *
+ * Fases (issue #7): `herdr agent wait` es level-triggered — matchea al instante
+ * si el estado ACTUAL ya está en el until-set, y bloquea hasta que lo esté.
+ * - arm (inicial): working|blocked|done. Confirmar que el turno arrancó antes
+ *   de aceptar settle; sin --until, durante la latencia prompt→turno herdr aún
+ *   reporta idle → settle falso → auto-close mataba al agente a los ~5s.
+ *   done/blocked cubren al agente ultra-rápido o bloqueado antes del armado.
+ * - rearm (keepOpen tras settle): working|blocked. NUNCA done/idle — el estado
+ *   actual es precisamente el acabado de reportar y el wait lo instant-matchea
+ *   (flood de eventos con triggerTurn, finding 1 de la revisión #7).
+ * - settle: sin --until (herdr matchea idle|done|blocked por defecto).
+ *
+ * Hang aceptado (trade-off): un agente cuyo turno nunca arranca (pane vivo con
+ * idle persistente, p.ej. pi muerto) deja el watcher bloqueado en fase arm/rearm
+ * y el record `live` en herdr_agents. Escape manual: herdr_stop.
  */
 import { type ChildProcess } from "node:child_process";
 import { agentRead, type RunFn } from "./herdr.ts";
+
+export type WaitPhase = "settle" | "arm" | "rearm";
 
 export type WatchEvent =
 	| { kind: "blocked" }
@@ -15,7 +32,7 @@ export type WatchEvent =
 
 export interface WatchDeps {
 	run: RunFn;
-	spawnWait: (name: string, phase?: "settle" | "working") => ChildProcess;
+	spawnWait: (name: string, phase?: WaitPhase) => ChildProcess;
 }
 
 export interface WatchHandle {
@@ -49,16 +66,17 @@ export function armWatcher(
 			stopped = true;
 			return;
 		}
-		// keepOpen tras settle: esperar a que el agente VUELVA a trabajar antes del
-		// ciclo normal — si no, wait retorna al instante y buclea en caliente (issue #5)
 		if (ev.kind === "settled") {
-			cycle("working");
+			// keepOpen tras settle: esperar a que el agente VUELVA a trabajar (o
+			// se bloquee) antes del ciclo normal — si no, el wait instant-matchea
+			// el estado terminal recién reportado y buclea en caliente (issues #5 y #7-F1)
+			cycle("rearm");
 		} else {
 			cycle();
 		}
 	};
 
-	const cycle = (phase: "settle" | "working" = "settle"): void => {
+	const cycle = (phase: WaitPhase = "settle"): void => {
 		if (stopped) return;
 		const child = deps.spawnWait(name, phase);
 		current = child;
@@ -106,8 +124,8 @@ export function armWatcher(
 				})();
 				return;
 			}
-			if (status === "working" && phase === "working") {
-				// el agente volvió a trabajar: entrar al ciclo normal de settle
+			if (status === "working" && phase !== "settle") {
+				// el agente está trabajando (arranque o reanudación): entrar al ciclo de settle
 				cycle();
 				return;
 			}
@@ -115,7 +133,8 @@ export function armWatcher(
 		});
 	};
 
-	cycle();
+	// issue #7: arm inicial en fase arm — no aceptar settle hasta ver el turno arrancar
+	cycle("arm");
 	return {
 		stop(): void {
 			stopped = true;
