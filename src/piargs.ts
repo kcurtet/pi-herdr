@@ -27,10 +27,13 @@ export function buildPiArgs(
 	} else {
 		args.push("--no-extensions");
 		if (resolved.extensions !== false) {
-			for (const p of resolveExtensions(resolved.extensions, d)) args.push("-e", p);
+			for (const p of resolveExtensions(resolved.extensions, d)) {
+				if (p === d.stateExt) continue; // el usuario ya lo pidió: no duplicar
+				args.push("-e", p);
+			}
 		}
-		// exención interna: estados exactos para el watcher (spec D3)
-		if (existsSync(d.stateExt)) args.push("-e", d.stateExt);
+		// exención interna: estados exactos para el watcher (spec D3), sin duplicar
+		if (existsSync(d.stateExt) && !args.includes(d.stateExt)) args.push("-e", d.stateExt);
 	}
 
 	return args;
