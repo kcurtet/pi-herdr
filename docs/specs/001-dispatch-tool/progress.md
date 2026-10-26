@@ -23,3 +23,5 @@ Task 7: complete (commit 49df3e6, tests: 62/62, typecheck OK)
 - Ruling T8: merged-check lazy (solo con status limpio se pregunta branch --merged); decideCleanup sigue como tabla de decisión pura usada por cleanupWorktree.
 Task 8: complete (commit e0c76c0, tests: 73/73, typecheck OK)
 Task 9: complete (commit eff9198, tests: 80/80, typecheck OK)
+- Ruling T10: API real pi 1.4 appendEntry(customType, data) y entries {type:'custom'} — Registry adaptado (no objeto único). Smoke carga: pi --extension . --model ollama/gemma4 → ok. E2E vivo: dispatch real, settle con output, auto-close verificados.
+Task 10: complete (commit fd472de, tests: 87/87, typecheck OK, smoke carga OK, E2E vivo OK — agente responde-solo-palabra settled 'listo' + auto-close)
