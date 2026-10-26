@@ -1,0 +1,1 @@
+{"id":"cli:agent:list","result":{"agents":[{"agent":"pi","agent_status":"idle","interactive_ready":true,"name":"dash-patch","pane_id":"w13:pY","tab_id":"w13:tW","workspace_id":"w13"},{"agent":"pi","agent_status":"working","cwd":"/home/kx/dev/intruder","focused":true,"pane_id":"w4:p1","tab_id":"w4:t1","workspace_id":"w4"}],"type":"agent_list"}}

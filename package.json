@@ -1,0 +1,30 @@
+{
+	"name": "pi-herdr",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "herdr-dispatch as pi tools: one call = full visible dispatch in a herdr pane",
+	"keywords": [
+		"pi-package"
+	],
+	"license": "MIT",
+	"repository": "github:kcurtet/pi-herdr",
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^1.4.0",
+		"@types/node": "^22",
+		"typebox": "^1.4.3",
+		"typescript": "^5",
+		"vitest": "^3"
+	}
+}
