@@ -1,0 +1,114 @@
+/**
+ * Watcher de agente herdr: ciclo wait-driven (adaptado del motor de pi-monitor).
+ *
+ * Cada ciclo: spawn de `herdr agent wait <name>` → al salir, clasificar el
+ * estado → delegar en onEvent. onEvent devuelve true para re-armar (blocked,
+ * keepOpen) y false para terminar. `gone` nunca re-arma.
+ */
+import { type ChildProcess } from "node:child_process";
+import { agentRead, type RunFn } from "./herdr.ts";
+
+export type WatchEvent =
+	| { kind: "blocked" }
+	| { kind: "settled"; state: "idle" | "done"; output: string }
+	| { kind: "gone"; reason: string };
+
+export interface WatchDeps {
+	run: RunFn;
+	spawnWait: (name: string) => ChildProcess;
+}
+
+export interface WatchHandle {
+	stop(): void;
+}
+
+export function armWatcher(
+	deps: WatchDeps,
+	name: string,
+	onEvent: (ev: WatchEvent) => Promise<boolean>,
+): WatchHandle {
+	let stopped = false;
+	let current: ChildProcess | undefined;
+
+	const killCurrent = (): void => {
+		current?.kill("SIGTERM");
+		const t = setTimeout(() => current?.kill("SIGKILL"), 5_000);
+		t.unref?.();
+	};
+
+	const deliver = async (ev: WatchEvent): Promise<void> => {
+		if (stopped) return;
+		let again = false;
+		try {
+			again = await onEvent(ev);
+		} catch {
+			again = false;
+		}
+		if (stopped) return;
+		if (!again || ev.kind === "gone") {
+			stopped = true;
+			return;
+		}
+		cycle();
+	};
+
+	const cycle = (): void => {
+		if (stopped) return;
+		const child = deps.spawnWait(name);
+		current = child;
+		let stdout = "";
+		child.stdout?.setEncoding("utf8");
+		child.stdout?.on("data", (c: string) => {
+			stdout += c;
+		});
+		let stderr = "";
+		child.stderr?.setEncoding("utf8");
+		child.stderr?.on("data", (c: string) => {
+			stderr += c;
+		});
+		child.on("error", (err) => {
+			void deliver({ kind: "gone", reason: `spawn error: ${err.message}` });
+		});
+		child.on("close", (code) => {
+			current = undefined;
+			if (stopped) return;
+			if (code !== 0) {
+				const detail = stderr.trim().slice(0, 200);
+				void deliver({ kind: "gone", reason: `wait exited ${code}${detail ? `: ${detail}` : ""}` });
+				return;
+			}
+			let status = "unknown";
+			try {
+				status = (JSON.parse(stdout) as { result?: { agent?: { agent_status?: string } } })
+					?.result?.agent?.agent_status ?? "unknown";
+			} catch {
+				// JSON ilegible → unknown
+			}
+			if (status === "blocked") {
+				void deliver({ kind: "blocked" });
+				return;
+			}
+			if (status === "idle" || status === "done") {
+				void (async () => {
+					let output = "";
+					try {
+						output = await agentRead(deps.run, { name });
+					} catch (err) {
+						output = `[read error] ${(err as Error).message}`;
+					}
+					await deliver({ kind: "settled", state: status, output });
+				})();
+				return;
+			}
+			void deliver({ kind: "gone", reason: `estado no reconocido tras wait: ${status}` });
+		});
+	};
+
+	cycle();
+	return {
+		stop(): void {
+			stopped = true;
+			killCurrent();
+		},
+	};
+}
