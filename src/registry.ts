@@ -10,6 +10,7 @@ import type { EmitFn, CleanupWorktreeFn } from "./settle.ts";
 import type { ChildProcess } from "node:child_process";
 import { armWatcher, type WaitPhase } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
+import { nameSet } from "./slug.ts";
 
 export interface DispatchRecord {
 	agent: string;
@@ -121,7 +122,7 @@ export interface ReconcileDeps {
  */
 export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 	const agents = await agentList(deps.run);
-	const liveNames = new Set(agents.flatMap((a) => (a.name ? [a.name] : [])));
+	const liveNames = nameSet(agents);
 	const reArmed: string[] = [];
 	for (const rec of deps.registry.list()) {
 		if (rec.status !== "live") continue;
