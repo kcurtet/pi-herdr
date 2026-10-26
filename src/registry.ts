@@ -135,14 +135,9 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 			reArmed.push(rec.agent);
 			continue;
 		}
-		// muerto: cleanup de worktree pendiente UNA vez, luego closed
-		if (rec.worktree) {
-			await deps
-				.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch })
-				.catch(() => undefined);
-			rec.worktree = undefined;
-		}
-		deps.registry.markClosed(rec.agent);
+		// muerto: cleanup de worktree pendiente UNA vez, luego closed (sin close:
+		// el agente y su pane ya no existen)
+		await abandonDispatch(deps, rec, false);
 	}
 	return reArmed;
 }
@@ -150,6 +145,20 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 /** Cierre de un record vivo (shutdown/stop): close best-effort + markClosed. */
 export async function closeRecord(run: RunFn, rec: DispatchRecord): Promise<void> {
 	await closeTarget(run, { kind: rec.topology, id: rec.targetId }).catch(() => undefined);
+}
+
+/**
+ * Abandona un despacho vivo: cleanup del worktree pendiente (best-effort) +
+ * close del target topológico (salvo close=false: el target ya no existe,
+ * p.ej. agente muerto en reconcile) + markClosed. Idempotente por estado.
+ */
+async function abandonDispatch(deps: CleanupDeps, rec: DispatchRecord, close = true): Promise<void> {
+	if (rec.worktree) {
+		await deps.cleanupWorktree(deps.run, rec.worktree).catch(() => undefined);
+		rec.worktree = undefined;
+	}
+	if (close) await closeRecord(deps.run, rec);
+	deps.registry.markClosed(rec.agent);
 }
 
 export interface CleanupDeps {
@@ -163,12 +172,7 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
 	const rec = deps.registry.get(agent);
 	if (!rec) throw new Error(`pi-herdr: despacho "${agent}" no encontrado. Usa herdr_agents para listar.`);
 	if (rec.status === "closed") throw new Error(`pi-herdr: "${agent}" ya está cerrado.`);
-	if (rec.worktree) {
-		await deps.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
-		rec.worktree = undefined;
-	}
-	await closeRecord(deps.run, rec);
-	deps.registry.markClosed(agent);
+	await abandonDispatch(deps, rec);
 	return `Despacho ${agent} detenido y ${rec.topology} cerrado.`;
 }
 
@@ -185,11 +189,6 @@ export async function stopDispatch(
 export async function shutdownCleanup(deps: CleanupDeps): Promise<void> {
 	for (const rec of deps.registry.list()) {
 		if (rec.status !== "live") continue;
-		if (rec.worktree) {
-			await deps.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
-			rec.worktree = undefined;
-		}
-		await closeRecord(deps.run, rec);
-		deps.registry.markClosed(rec.agent);
+		await abandonDispatch(deps, rec);
 	}
 }
