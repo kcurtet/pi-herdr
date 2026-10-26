@@ -23,9 +23,10 @@ import {
 	Registry,
 	reconcile,
 	shutdownCleanup,
-	stopAgent,
+	stopDispatch,
 	type DispatchRecord,
 } from "./src/registry.ts";
+import type { WatchHandle } from "./src/watch.ts";
 
 const DispatchParams = Type.Object(
 	{
@@ -65,9 +66,16 @@ const StopParams = Type.Object(
 
 export default function herdrExtension(pi: ExtensionAPI) {
 	const registry = new Registry(pi);
+	const watchers = new Map<string, WatchHandle>();
 
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
+	};
+
+	const armTracked: typeof armWatcher = (wd, name, onEvent) => {
+		const handle = armWatcher(wd, name, onEvent);
+		watchers.set(name, handle);
+		return handle;
 	};
 
 	const deps: DispatchDeps = {
@@ -75,7 +83,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		registry,
 		cwd: process.cwd(),
 		spawnWait: herdrWaitSpawn,
-		arm: armWatcher,
+		arm: armTracked,
 		settleFor: (rec: DispatchRecord) =>
 			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
 	};
@@ -137,7 +145,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		parameters: StopParams,
 		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 		execute: async (_id, params) => {
-			const text = await stopAgent({ run: localRun, registry, cleanupWorktree }, params.agent);
+			const text = await stopDispatch({ run: localRun, registry, cleanupWorktree, watchers }, params.agent);
 			return { content: [{ type: "text", text }], details: { agent: params.agent } };
 		},
 	});

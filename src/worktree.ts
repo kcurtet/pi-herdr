@@ -25,7 +25,7 @@ async function git(run: RunFn, args: string[]): Promise<{ code: number; stdout: 
 export async function createWorktree(
 	run: RunFn,
 	o: { repo: string; name: string },
-): Promise<{ dir: string; branch: string }> {
+): Promise<{ repo: string; dir: string; branch: string }> {
 	const top = await git(run, [o.repo, "rev-parse", "--show-toplevel"]);
 	if (top.code !== 0) {
 		throw new Error(`pi-herdr: "${o.repo}" no es un repo git (worktree:true lo requiere)`);
@@ -40,7 +40,7 @@ export async function createWorktree(
 	if (add.code !== 0) {
 		throw new Error(`pi-herdr: git worktree add falló: ${add.stderr.trim()}`);
 	}
-	return { dir, branch };
+	return { repo: repoRoot, dir, branch };
 }
 
 export async function cleanupWorktree(

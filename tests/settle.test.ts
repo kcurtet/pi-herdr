@@ -30,12 +30,12 @@ function setup(over: Partial<DispatchRecord> = {}) {
 	const emit = (content: string, details: Record<string, unknown>) => {
 		emitted.push({ content, details });
 	};
-	const cleanups: { dir: string; branch: string }[] = [];
+	const cleanups: { repo: string; dir: string; branch: string }[] = [];
 	const registry = new Registry();
 	const rec = baseRec(over);
 	registry.add(rec);
 	const cleanupWorktree = async (_run: RunFn, o: { repo: string; dir: string; branch: string }) => {
-		cleanups.push({ dir: o.dir, branch: o.branch });
+		cleanups.push({ repo: o.repo, dir: o.dir, branch: o.branch });
 		return { removed: true } as const;
 	};
 	const handler = makeSettleHandler({ run, registry, emit, cleanupWorktree });
@@ -63,12 +63,13 @@ describe("makeSettleHandler — settled", () => {
 		expect(emitted[0].content).toContain("keepOpen");
 	});
 
-	it("con worktree y cierre definitivo: corre cleanup conservador antes de cerrar", async () => {
+	it("con worktree y cierre definitivo: cleanup conservador ANTES de cerrar, con repo del worktree (no rec.cwd)", async () => {
 		const { handler, cleanups, calls } = setup({
-			worktree: { dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" },
+			cwd: "/x/.hd-worktrees/impl-x",
+			worktree: { repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" },
 		});
 		await handler("impl-x", { kind: "settled", state: "idle", output: "ok" });
-		expect(cleanups).toEqual([{ dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" }]);
+		expect(cleanups).toEqual([{ repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" }]);
 		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
 	});
 });
@@ -96,7 +97,7 @@ describe("makeSettleHandler — gone", () => {
 
 	it("gone con worktree: cleanup una sola vez, sin close", async () => {
 		const { handler, cleanups, calls } = setup({
-			worktree: { dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" },
+			worktree: { repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" },
 		});
 		await handler("impl-x", { kind: "gone", reason: "muerto" });
 		expect(cleanups).toHaveLength(1);
@@ -107,7 +108,7 @@ describe("makeSettleHandler — gone", () => {
 describe("makeSettleHandler — idempotencia", () => {
 	it("record ya closed + evento repetido: ni re-cierra ni re-limpia ni emite", async () => {
 		const { handler, registry, calls, emitted, cleanups } = setup({
-			worktree: { dir: "/d", branch: "hd/impl-x" },
+			worktree: { repo: "/x/repo", dir: "/d", branch: "hd/impl-x" },
 		});
 		await handler("impl-x", { kind: "settled", state: "idle", output: "x" });
 		const callsAfterFirst = calls.length;

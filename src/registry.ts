@@ -18,7 +18,7 @@ export interface DispatchRecord {
 	targetId: string;
 	paneId: string;
 	cwd: string;
-	worktree?: { dir: string; branch: string };
+	worktree?: { repo: string; dir: string; branch: string };
 	keepOpen: boolean;
 	createdAt: number;
 	status: "live" | "closed";
@@ -108,7 +108,7 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 		// muerto: cleanup de worktree pendiente UNA vez, luego closed
 		if (rec.worktree) {
 			await deps
-				.cleanupWorktree(deps.run, { repo: rec.cwd, dir: rec.worktree.dir, branch: rec.worktree.branch })
+				.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch })
 				.catch(() => undefined);
 			rec.worktree = undefined;
 		}
@@ -134,7 +134,7 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
 	if (!rec) throw new Error(`pi-herdr: despacho "${agent}" no encontrado. Usa herdr_agents para listar.`);
 	if (rec.status === "closed") throw new Error(`pi-herdr: "${agent}" ya está cerrado.`);
 	if (rec.worktree) {
-		await deps.cleanupWorktree(deps.run, { repo: rec.cwd, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
+		await deps.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
 		rec.worktree = undefined;
 	}
 	await closeRecord(deps.run, rec);
@@ -142,12 +142,21 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
 	return `Despacho ${agent} detenido y ${rec.topology} cerrado.`;
 }
 
+/** herdr_stop completo (spec D1): para el watcher ANTES de cerrar el despacho. */
+export async function stopDispatch(
+	deps: CleanupDeps & { watchers: Map<string, { stop(): void }> },
+	agent: string,
+): Promise<string> {
+	deps.watchers.get(agent)?.stop();
+	return stopAgent(deps, agent);
+}
+
 /** session_shutdown: cierra todo lo live, idempotente, sin lanzar por fallos individuales. */
 export async function shutdownCleanup(deps: CleanupDeps): Promise<void> {
 	for (const rec of deps.registry.list()) {
 		if (rec.status !== "live") continue;
 		if (rec.worktree) {
-			await deps.cleanupWorktree(deps.run, { repo: rec.cwd, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
+			await deps.cleanupWorktree(deps.run, { repo: rec.worktree.repo, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
 			rec.worktree = undefined;
 		}
 		await closeRecord(deps.run, rec);

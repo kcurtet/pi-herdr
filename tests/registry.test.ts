@@ -70,7 +70,7 @@ function agentListRun(names: string[]): RunFn {
 function reconcileDeps(over?: { run?: RunFn; registry?: Registry }) {
 	const registry = over?.registry ?? new Registry();
 	const armed: string[] = [];
-	const cleanups: { dir: string; branch: string }[] = [];
+	const cleanups: { repo: string; dir: string; branch: string }[] = [];
 	const emitted: { content: string; details: Record<string, unknown> }[] = [];
 	const deps = {
 		run: over?.run ?? agentListRun([]),
@@ -85,8 +85,8 @@ function reconcileDeps(over?: { run?: RunFn; registry?: Registry }) {
 		emit: ((content: string, details: Record<string, unknown>) => {
 			emitted.push({ content, details });
 		}) as EmitFn,
-		cleanupWorktree: async (_run: RunFn, o: { dir: string; branch: string }) => {
-			cleanups.push({ dir: o.dir, branch: o.branch });
+		cleanupWorktree: async (_run: RunFn, o: { repo: string; dir: string; branch: string }) => {
+			cleanups.push({ repo: o.repo, dir: o.dir, branch: o.branch });
 			return { removed: true } as const;
 		},
 	};
@@ -103,20 +103,20 @@ describe("reconcile", () => {
 		expect(armed).toEqual(["impl-x"]);
 	});
 
-	it("record live + agente muerto → markClosed + cleanup worktree UNA vez", async () => {
+	it("record live + agente muerto → markClosed + cleanup worktree UNA vez (con repo del worktree)", async () => {
 		const registry = new Registry();
-		registry.add(rec({ worktree: { dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
+		registry.add(rec({ worktree: { repo: "/w/repo", dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
 		const { deps, cleanups } = reconcileDeps({ run: agentListRun(["otro"]), registry });
 		await reconcile(deps);
 		expect(registry.get("impl-x")!.status).toBe("closed");
-		expect(cleanups).toEqual([{ dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" }]);
+		expect(cleanups).toEqual([{ repo: "/w/repo", dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" }]);
 		await reconcile(deps); // segunda pasada: idempotente
 		expect(cleanups).toHaveLength(1);
 	});
 
 	it("record ya closed → ni arm ni cleanup", async () => {
 		const registry = new Registry();
-		registry.add(rec({ worktree: { dir: "/d", branch: "hd/impl-x" } }));
+		registry.add(rec({ worktree: { repo: "/d/repo", dir: "/d", branch: "hd/impl-x" } }));
 		registry.markClosed("impl-x");
 		const { deps, armed, cleanups } = reconcileDeps({ run: agentListRun(["impl-x"]), registry });
 		await reconcile(deps);
