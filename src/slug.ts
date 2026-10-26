@@ -30,9 +30,9 @@ export function withSuffix(base: string, suffix: string): string {
 	return base.slice(0, room) + suffix;
 }
 
-async function liveNames(run: RunFn): Promise<Set<string>> {
-	const agents = await agentList(run);
-	return new Set(agents.flatMap((a) => (a.name ? [a.name] : [])));
+export async function liveNames(run: RunFn): Promise<Set<string>> {
+		const agents = await agentList(run);
+		return new Set(agents.flatMap((a) => (a.name ? [a.name] : [])));
 }
 
 /**
