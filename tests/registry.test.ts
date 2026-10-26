@@ -22,33 +22,34 @@ function rec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 }
 
 function hostStub() {
-	const appended: unknown[] = [];
-	return { appended, host: { appendEntry: (e: unknown) => appended.push(e) } };
+	const appended: { customType: string; data?: unknown }[] = [];
+	return { appended, host: { appendEntry: (customType: string, data?: unknown) => appended.push({ customType, data }) } };
 }
 
 describe("Registry persistencia", () => {
 	it("add persiste un entry herdr-dispatch-record cuando hay host", () => {
 		const { appended, host } = hostStub();
-		const r = new Registry(host as never);
+		const r = new Registry(host);
 		r.add(rec());
 		expect(appended).toHaveLength(1);
-		expect((appended[0] as { customType: string }).customType).toBe("herdr-dispatch-record");
+		expect(appended[0].customType).toBe("herdr-dispatch-record");
 	});
 
 	it("markClosed persiste el cierre", () => {
 		const { appended, host } = hostStub();
-		const r = new Registry(host as never);
+		const r = new Registry(host);
 		r.add(rec());
 		r.markClosed("impl-x");
-		expect((appended[1] as { customType: string }).customType).toBe("herdr-dispatch-close");
+		expect(appended[1].customType).toBe("herdr-dispatch-close");
 	});
 
 	it("fromEntries repones solo entries propios; closures cierran; orden manda", () => {
 		const entries = [
-			{ customType: "otra-cosa", data: 1 },
-			{ customType: "herdr-dispatch-record", record: rec({ agent: "a" }) },
-			{ customType: "herdr-dispatch-record", record: rec({ agent: "b", topology: "pane" }) },
-			{ customType: "herdr-dispatch-close", agent: "a" },
+			{ type: "message", message: { role: "user" } },
+			{ type: "custom", customType: "otra-cosa", data: { x: 1 } },
+			{ type: "custom", customType: "herdr-dispatch-record", data: rec({ agent: "a" }) },
+			{ type: "custom", customType: "herdr-dispatch-record", data: rec({ agent: "b", topology: "pane" }) },
+			{ type: "custom", customType: "herdr-dispatch-close", data: { agent: "a" } },
 		];
 		const r = Registry.fromEntries(entries);
 		expect(r.get("a")!.status).toBe("closed");

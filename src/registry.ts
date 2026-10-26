@@ -26,7 +26,7 @@ export interface DispatchRecord {
 
 /** Subconjunto de la ExtensionAPI que el registry necesita (seam de tests). */
 export interface RegistryHost {
-	appendEntry(entry: unknown): void;
+	appendEntry(customType: string, data?: unknown): void;
 }
 
 const RECORD_TYPE = "herdr-dispatch-record";
@@ -39,7 +39,7 @@ export class Registry {
 
 	add(rec: DispatchRecord): void {
 		this.map.set(rec.agent, rec);
-		this.host?.appendEntry({ customType: RECORD_TYPE, record: { ...rec } });
+		this.host?.appendEntry(RECORD_TYPE, { ...rec });
 	}
 
 	get(agent: string): DispatchRecord | undefined {
@@ -54,18 +54,19 @@ export class Registry {
 		const rec = this.map.get(agent);
 		if (!rec) return;
 		rec.status = "closed";
-		this.host?.appendEntry({ customType: CLOSE_TYPE, agent });
+		this.host?.appendEntry(CLOSE_TYPE, { agent });
 	}
 
 	/** Replay de entries de la rama activa: records en orden, closures cierran. */
 	static fromEntries(entries: unknown[]): Registry {
 		const r = new Registry();
 		for (const e of entries) {
-			const entry = e as { customType?: string; record?: DispatchRecord; agent?: string };
-			if (entry?.customType === RECORD_TYPE && entry.record) {
-				r.map.set(entry.record.agent, entry.record);
-			} else if (entry?.customType === CLOSE_TYPE && entry.agent) {
-				const rec = r.map.get(entry.agent);
+			const entry = e as { type?: string; customType?: string; data?: { agent?: string } & Partial<DispatchRecord> };
+			if (entry?.type !== "custom") continue;
+			if (entry.customType === RECORD_TYPE && entry.data?.agent) {
+				r.map.set(entry.data.agent, entry.data as DispatchRecord);
+			} else if (entry.customType === CLOSE_TYPE && entry.data?.agent) {
+				const rec = r.map.get(entry.data.agent);
 				if (rec) rec.status = "closed";
 			}
 		}
@@ -119,4 +120,37 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 /** Cierre de un record vivo (shutdown/stop): close best-effort + markClosed. */
 export async function closeRecord(run: RunFn, rec: DispatchRecord): Promise<void> {
 	await closeTarget(run, { kind: rec.topology, id: rec.targetId }).catch(() => undefined);
+}
+
+export interface CleanupDeps {
+	run: RunFn;
+	registry: Registry;
+	cleanupWorktree: CleanupWorktreeFn;
+}
+
+/** herdr_stop: abandona ya — cleanup worktree + close + markClosed. */
+export async function stopAgent(deps: CleanupDeps, agent: string): Promise<string> {
+	const rec = deps.registry.get(agent);
+	if (!rec) throw new Error(`pi-herdr: despacho "${agent}" no encontrado. Usa herdr_agents para listar.`);
+	if (rec.status === "closed") throw new Error(`pi-herdr: "${agent}" ya está cerrado.`);
+	if (rec.worktree) {
+		await deps.cleanupWorktree(deps.run, { repo: rec.cwd, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
+		rec.worktree = undefined;
+	}
+	await closeRecord(deps.run, rec);
+	deps.registry.markClosed(agent);
+	return `Despacho ${agent} detenido y ${rec.topology} cerrado.`;
+}
+
+/** session_shutdown: cierra todo lo live, idempotente, sin lanzar por fallos individuales. */
+export async function shutdownCleanup(deps: CleanupDeps): Promise<void> {
+	for (const rec of deps.registry.list()) {
+		if (rec.status !== "live") continue;
+		if (rec.worktree) {
+			await deps.cleanupWorktree(deps.run, { repo: rec.cwd, dir: rec.worktree.dir, branch: rec.worktree.branch }).catch(() => undefined);
+			rec.worktree = undefined;
+		}
+		await closeRecord(deps.run, rec);
+		deps.registry.markClosed(rec.agent);
+	}
 }
