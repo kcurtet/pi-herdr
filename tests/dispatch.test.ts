@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dispatch, type DispatchDeps } from "../src/dispatch.ts";
+import { dispatch, promptAgent, readAgent, type DispatchDeps } from "../src/dispatch.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
@@ -45,6 +45,63 @@ const routes = {
 	"agent prompt": ok('{"result":{"type":"ok"}}'),
 	"tab close": ok('{"result":{"type":"ok"}}'),
 };
+
+const baseRecord: import("../src/registry.ts").DispatchRecord = {
+	agent: "impl-x",
+	taskId: "hd-1",
+	topology: "tab",
+	targetId: "w4:t4K",
+	paneId: "w4:p4M",
+	cwd: "/repo",
+	keepOpen: false,
+	createdAt: Date.now(),
+	status: "live",
+};
+
+	describe("herdr_prompt", () => {
+	it("agente desconocido: error que remite a herdr_agents", async () => {
+		const { run } = fakeRun(routes);
+		const { deps } = makeDeps({ run });
+		await expect(promptAgent(deps, "fantasma", "sigue")).rejects.toThrow(/no encontrado.*herdr_agents/s);
+	});
+
+	it("record cerrado: error que sugiere nuevo dispatch", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord, agent: "viejo", status: "closed" });
+		await expect(promptAgent(deps, "viejo", "sigue")).rejects.toThrow(/herdr_dispatch/);
+	});
+
+	it("agent_blocked: devuelve aviso de aprobación sin lanzar", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toMatch(/aprobaci/i);
+	});
+
+	it("submitted: OK sin re-armar watcher (arm no llamado)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps, armedWith } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const msg = await promptAgent(deps, "impl-x", "segunda ronda");
+		expect(msg).toMatch(/impl-x/);
+		expect(armedWith).toHaveLength(0);
+	});
+});
+
+describe("herdr_read", () => {
+	it("passthrough de agentRead con lines default 200", async () => {
+		const { run, calls } = fakeRun({ ...routes, "agent read": ok("texto del agente") });
+		const { deps } = makeDeps({ run });
+		const out = await readAgent(deps, "impl-x");
+		expect(out).toBe("texto del agente");
+		expect(calls[0].args).toEqual(["agent", "read", "impl-x", "--source", "recent-unwrapped", "--lines", "200"]);
+	});
+});
 
 describe("dispatch — gates", () => {
 	it("sin HERDR_ENV: throw ANTES de cualquier llamada herdr (cero side effects)", async () => {
