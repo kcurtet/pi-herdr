@@ -475,9 +475,15 @@ describe("waitArgs (herdr agent wait) — issue #7", () => {
 		expect(waitArgs("t", "settle")).toEqual(["agent", "wait", "t"]);
 	});
 
-	it("fase working: --until working blocked done — confirma arranque, no cuelga con done/blocked", () => {
-		expect(waitArgs("t", "working")).toEqual([
+	it("fase arm: --until working blocked done — confirma arranque, captura done/blocked tempranos", () => {
+		expect(waitArgs("t", "arm")).toEqual([
 			"agent", "wait", "t", "--until", "working", "--until", "blocked", "--until", "done",
+		]);
+	});
+
+	it("fase rearm: --until working blocked — JAMÁS done/idle (flood, finding 1 revisión #7)", () => {
+		expect(waitArgs("t", "rearm")).toEqual([
+			"agent", "wait", "t", "--until", "working", "--until", "blocked",
 		]);
 	});
 });

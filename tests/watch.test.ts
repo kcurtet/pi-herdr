@@ -1,19 +1,20 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { armWatcher, type WatchEvent } from "../src/watch.ts";
+import { waitArgs } from "../src/dispatch.ts";
 import type { RunFn } from "../src/herdr.ts";
 
 function waitJson(status: string): string {
 	return JSON.stringify({ id: "cli:agent:wait", result: { agent: { name: "t", agent_status: status, pane_id: "w1:p1" } } });
 }
 
-/** spawnWait que emite la secuencia de estados indicada; en fase working el turno "arranca" (issue #7). */
+/** spawnWait que emite la secuencia de estados indicada; en fases arm/rearm el turno "arranca" (issue #7). */
 function waitSeq(states: string[], spawnCount: { n: number }) {
 	let i = 0;
-	return (_name: string, phase?: "settle" | "working"): ChildProcess => {
+	return (_name: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
 		spawnCount.n++;
 		let s: string;
-		if (phase === "working") {
+		if (phase === "arm" || phase === "rearm") {
 			s = "working";
 		} else {
 			s = states[Math.min(i, states.length - 1)]!;
@@ -113,13 +114,13 @@ describe("armWatcher", () => {
 		expect(events).toEqual([]);
 	});
 
-	it("settle con keepOpen (onEvent=true) re-arma via fase working", async () => {
+	it("settle con keepOpen (onEvent=true) re-arma via fase rearm", async () => {
 		const spawnCount = { n: 0 };
 		const settleStates = ["idle", "idle"];
 		let settleIdx = 0;
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
 			spawnCount.n++;
-			const s = phase === "working" ? "working" : settleStates[Math.min(settleIdx++, settleStates.length - 1)]!;
+			const s = phase === "arm" || phase === "rearm" ? "working" : settleStates[Math.min(settleIdx++, settleStates.length - 1)]!;
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
 		};
 		const { events, onEvent } = collector([true, false]);
@@ -129,14 +130,14 @@ describe("armWatcher", () => {
 		expect(events.filter((e) => e.kind === "settled")).toHaveLength(2);
 	});
 
-	it("keepOpen tras settle: siguiente spawn es fase working (no bucle caliente) — issue #5", async () => {
-		const phases: ("settle" | "working" | undefined)[] = [];
+	it("keepOpen tras settle: siguiente spawn es fase rearm (no bucle caliente) — issue #5", async () => {
+		const phases: ("settle" | "arm" | "rearm" | undefined)[] = [];
 		let settleIdx = 0;
-		const settleStates = ["idle", "idle"]; // settle 1 → working → settle 2
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+		const settleStates = ["idle", "idle"]; // settle 1 → rearm → settle 2
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
 			phases.push(phase);
-			if (phase === "working") {
-				// wait --until working: bloquea hasta que el agente trabaja
+			if (phase === "arm" || phase === "rearm") {
+				// wait --until working/blocked: bloquea hasta que el agente trabaja (o bloquea)
 				return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("working")}'; exit 0`]);
 			}
 			const s = settleStates[Math.min(settleIdx, settleStates.length - 1)]!;
@@ -145,23 +146,23 @@ describe("armWatcher", () => {
 		};
 		const { events, onEvent } = collector([true, false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
-		await waitFor(() => events.length >= 2, "settle → working → settle");
+		await waitFor(() => events.length >= 2, "settle → rearm → settle");
 		expect(events.map((e) => e.kind)).toEqual(["settled", "settled"]);
-		expect(phases).toEqual(["working", "settle", "working", "settle"]);
+		expect(phases).toEqual(["arm", "settle", "rearm", "settle"]);
 	});
 
 	it("keepOpen con agente que NO vuelve a trabajar: cero eventos extra (anti hot-loop)", async () => {
 		let spawns = 0;
-		let workingWaits = 0;
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+		let nonSettleWaits = 0;
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
 			spawns++;
-			if (phase === "working") {
-				workingWaits++;
-				if (workingWaits === 1) {
-					// arranque inicial: el turno sí empieza
+			if (phase !== undefined && phase !== "settle") {
+				nonSettleWaits++;
+				if (nonSettleWaits === 1) {
+					// arm inicial: el turno sí empieza
 					return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("working")}'; exit 0`]);
 				}
-				return spawn("bash", ["-c", "sleep 30"]); // re-arm: bloquea para siempre
+				return spawn("bash", ["-c", "sleep 30"]); // rearm: bloquea para siempre
 			}
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("done")}'; exit 0`]);
 		};
@@ -170,39 +171,68 @@ describe("armWatcher", () => {
 		await waitFor(() => events.length > 0, "primer settle");
 		await new Promise((r) => setTimeout(r, 250));
 		expect(events).toHaveLength(1); // sin spam
-		expect(spawns).toBe(3); // working + settle + working-wait bloqueado
+		expect(spawns).toBe(3); // arm + settle + rearm-wait bloqueado
 		handle.stop();
 	});
 
-	it("arm inicial en fase working: settle solo tras confirmar que el turno arrancó — issue #7", async () => {
-		const phases: ("settle" | "working" | undefined)[] = [];
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+	it("arm inicial en fase arm: settle solo tras confirmar que el turno arrancó — issue #7", async () => {
+		const phases: ("settle" | "arm" | "rearm" | undefined)[] = [];
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
 			phases.push(phase);
-			const s = phase === "working" ? "working" : "idle";
+			const s = phase === "arm" || phase === "rearm" ? "working" : "idle";
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
 		};
 		const { events, onEvent } = collector([false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length > 0, "settled tras working");
-		expect(phases[0]).toBe("working");
+		expect(phases[0]).toBe("arm");
 		expect(events[0]).toMatchObject({ kind: "settled", state: "idle" });
 	});
 
-	it("fase working inicial con done inmediato → settled(done) sin colgarse — issue #7", async () => {
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess =>
-			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "working" ? "done" : "idle")}'; exit 0`]);
+	it("fase arm con done inmediato → settled(done) sin colgarse — issue #7", async () => {
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess =>
+			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "arm" ? "done" : "idle")}'; exit 0`]);
 		const { events, onEvent } = collector([false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length > 0, "settled done");
 		expect(events[0]).toMatchObject({ kind: "settled", state: "done" });
 	});
 
-	it("fase working inicial con blocked → evento blocked (aprobación temprana) — issue #7", async () => {
-		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess =>
-			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "working" ? "blocked" : "idle")}'; exit 0`]);
+	it("fase arm con blocked → evento blocked (aprobación temprana) — issue #7", async () => {
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess =>
+			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "arm" ? "blocked" : "idle")}'; exit 0`]);
 		const { events, onEvent } = collector([false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length > 0, "blocked");
 		expect(events[0]).toEqual({ kind: "blocked" });
+	});
+
+	it("keepOpen con settled(done): el re-arm NO re-matchea done — sin flood (issue #7, finding 1)", async () => {
+		// Fake con semántica level-triggered REAL: los estados que instant-matchea
+		// cada fase se derivan del propio waitArgs (fuente única de verdad).
+		const allowedBy = (phase: "settle" | "arm" | "rearm" | undefined): Set<string> => {
+			if (phase === undefined || phase === "settle") return new Set(["idle", "done", "blocked"]); // default herdr
+			const args = waitArgs("t", phase);
+			const set = new Set<string>();
+			for (let i = 0; i < args.length; i++) {
+				if (args[i] === "--until") set.add(args[i + 1]!);
+			}
+			return set;
+		};
+		const status = "done"; // agente terminado; done persistente en herdr
+		let spawns = 0;
+		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+			spawns++;
+			return allowedBy(phase).has(status)
+				? spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(status)}'; exit 0`])
+				: spawn("bash", ["-c", "sleep 30"]); // estado actual fuera del until-set: bloquea
+		};
+		const { events, onEvent } = collector([true]); // keepOpen en cada settle
+		const handle = armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "settled done inicial");
+		await new Promise((r) => setTimeout(r, 250));
+		expect(events).toHaveLength(1); // sin flood de eventos
+		expect(spawns).toBe(2); // arm (done matchea) + rearm bloqueado (done FUERA del set)
+		handle.stop();
 	});
 });
