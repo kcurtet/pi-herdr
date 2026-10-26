@@ -48,13 +48,13 @@ Referencias de implementación: `~/dev/pi-monitor` (motor de watch a copiar), `~
 ## Decisiones de Implementación
 
 **D1 — Surface (5 tools)**:
-- `herdr_dispatch(task, name?, cwd?, topology?, kind?, worktree?, keepOpen?)` → `{ agent, paneId, taskId, worktreePath? }`
+- `herdr_dispatch(task, name?, cwd?, topology?, kind?, worktree?, keepOpen?)` → `{ agent, paneId, taskId, worktreePath? }` — `topology` acepta las tres: `"tab"` | `"pane"` | `"workspace"` (v1 completa).
 - `herdr_prompt(agent, text)` — re-prompt al agente vivo; el watcher re-arma la espera.
 - `herdr_read(agent, lines?)` — salida del agente (`recent-unwrapped`, default últimas 200 líneas).
 - `herdr_stop(agent)` — abandonar ya: cierra pane, para watcher, aplica política conservadora si hay worktree.
 - `herdr_agents()` — despachos vivos de la sesión (agente, estado, pane, worktree). Útil tras compaction.
 
-**D2 — Defaults**: `topology: "tab"` en el workspace actual (label = name), `kind: "pi"`, `cwd` = cwd de la sesión, `worktree: false`, `keepOpen: false`, `name` = slug de 2-3 palabras significativas de la task (normalizado a la regex y recortado; fallback `dispatch-N`), validando unicidad contra agentes vivos.
+**D2 — Defaults y topologías**: `topology: "tab"` en el workspace actual (label = name); `"pane"` = split a la derecha del pane actual; `"workspace"` = workspace nuevo con label = name. Todas con `--no-focus`. `kind: "pi"`, `cwd` = cwd de la sesión, `worktree: false`, `keepOpen: false`, `name` = slug de 2-3 palabras significativas de la task (normalizado a la regex y recortado; fallback `dispatch-N`), validando unicidad contra agentes vivos.
 
 **D3 — Watcher interno (copia del motor de pi-monitor)**: por despacho, spawn de `herdr agent wait <name> && herdr agent read <name> --source recent-unwrapped --lines 200`; batching de eventos (≤2s); entrega como mensajes custom vía `sendMessage` que disparan turno cuando el agente principal está idle. Persistent (sin timeout — el ciclo de vida lo gestionan auto-close/keepOpen/stop/shutdown). NO se registra como tool.
 
@@ -63,14 +63,15 @@ Referencias de implementación: `~/dev/pi-monitor` (motor de watch a copiar), `~
 - settle real (`idle`/`done`) → evento final con la salida legible → auto-close del tab/pane, salvo `keepOpen`.
 - pane cerrado a mano / agente muerto → evento `gone`, cleanup de registro, worktree según política conservadora.
 - `keepOpen: true` → sin auto-close; el watcher sigue emitiendo en cada settle; cierre explícito (`herdr_stop`) o en `session_shutdown`.
+- Cierre según topología: tab → `herdr tab close`, pane → `herdr pane close`, workspace → cerrar el workspace creado (cierra su tab raíz).
 - `session_shutdown` cierra todos los panes/tabs tracked (idempotente) y aplica la política de worktree a cada uno.
 
 **D5 — Worktree opcional** (`worktree: true`, requiere que `cwd` sea repo git):
-- Rama nueva `hd/<name>`, worktree en directorio hermano del repo: `<repo>/../.hd-worktrees/<name>` (no toca el repo, no requiere gitignore).
+- Rama nueva `hd/<name>` (base: HEAD del repo padre), worktree en directorio hermano del repo: `<repo>/../.hd-worktrees/<name>` (no toca el repo, no requiere gitignore). Si el directorio destino ya existe (p. ej. despacho previo sin limpiar) → error limpio, nunca sobreescribir.
 - El agente arranca con cwd = worktree.
 - Cleanup conservador al cerrar: borrar worktree+rama SOLO si el working tree está limpio y la rama está fully-merged; si hay WIP o commits sin merge → conservar y reportar path+rama en el evento final (gate humano).
 
-**D6 — Registry y estado**: una `appendEntry` por despacho (agent, paneId, taskId, worktree, topology, timestamps) para sobrevivir compaction; reconstrucción en `session_start` SOLO desde la rama activa (las ramas abandonadas son historias alternativas); `session_shutdown` limpia.
+**D6 — Registry, estado y re-arms**: una `appendEntry` por despacho (agent, paneId, taskId, worktree, topology, timestamps) para sobrevivir compaction; reconstrucción en `session_start` SOLO desde la rama activa (las ramas abandonadas son historias alternativas). El re-arm es activo: `session_start` reconcilia el registry contra `herdr agent list` — agente vivo → watcher re-armado (eventos y auto-close siguen funcionando tras resume/crash); agente muerto → entry marcado cerrado y política de worktree aplicada (idempotente, sin duplicar cleanup). `session_shutdown` limpia lo vivo.
 
 **D7 — Errores**: `HERDR_ENV` unset → error de tool claro. Name colisiona con agente vivo → error sugiriendo alternativas. `cwd` inexistente, o no-git con `worktree: true` → error claro ANTES de crear nada. `agent_blocked` devuelto por el prompt inicial → se trata como `blocked` (evento, sin close).
 
@@ -92,6 +93,8 @@ Referencias de implementación: `~/dev/pi-monitor` (motor de watch a copiar), `~
 - R7. Fuera de herdr → error claro, cero side effects.
 - R8. `session_shutdown` cierra los panes tracked de forma idempotente.
 - R9. El registry sobrevive compaction (`herdr_agents` lista el despacho vivo tras compactar).
+- R10. Tras resume/crash, `session_start` re-arma los watchers de los agentes aún vivos: los settles posteriores llegan como eventos y el auto-close funciona.
+- R11. Las tres topologías funcionan en v1: tab (default), pane (split derecha), workspace (label = name), cada una con su cierre correcto.
 
 ## Criterios de aceptación (Given/When/Then)
 
@@ -102,6 +105,10 @@ Referencias de implementación: `~/dev/pi-monitor` (motor de watch a copiar), `~
 - GIVEN `worktree: true` con WIP al cerrar THEN worktree conservado y evento reportando path y rama.
 - GIVEN `HERDR_ENV` unset WHEN `herdr_dispatch` THEN error de tool claro, cero side effects.
 - GIVEN despacho + compaction WHEN `herdr_agents` THEN el despacho vivo aparece listado.
+- GIVEN `topology: "pane"` WHEN dispatch THEN split a la derecha del pane actual sin foco; al settle, el pane queda cerrado.
+- GIVEN `topology: "workspace"` WHEN dispatch THEN workspace nuevo con label = name; al settle, el workspace queda cerrado.
+- GIVEN sesión resumida con agente herdr vivo WHEN `session_start` THEN watcher re-armado y el settle posterior llega como evento con auto-close.
+- GIVEN sesión resumida con agente muerto y worktree pendiente WHEN `session_start` THEN entry marcado cerrado y política conservadora aplicada una sola vez.
 
 ## Casos límite
 
