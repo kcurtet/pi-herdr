@@ -50,6 +50,10 @@ function fixtureDirs(): { d: ResourceDirs; base: string } {
 	mkdirSync(npmPkg, { recursive: true });
 	w(join(npmPkg, "package.json"), JSON.stringify({ name: "pi-lens", pi: { extensions: ["./index.ts"] } }));
 	w(join(npmPkg, "index.ts"), "// pi-lens");
+	const scopedPkg = join(d.npmNodeModules, "@scope", "escoped");
+	mkdirSync(scopedPkg, { recursive: true });
+	w(join(scopedPkg, "package.json"), JSON.stringify({ name: "@scope/escoped", pi: { extensions: ["./index.ts"] } }));
+	w(join(scopedPkg, "index.ts"), "// scoped");
 	const gitPkg = join(d.gitRoot, "github.com", "kcurtet", "pi-commit");
 	mkdirSync(gitPkg, { recursive: true });
 	w(join(gitPkg, "package.json"), JSON.stringify({ pi: { extensions: ["./index.ts"] } }));
@@ -62,6 +66,7 @@ function fixtureDirs(): { d: ResourceDirs; base: string } {
 	const settings = {
 		packages: [
 			"npm:pi-lens",
+			"npm:@scope/escoped@1.2.3",
 			"git:kcurtet/pi-commit",
 			"git:https://github.com/kcurtet/pi-monitor",
 			"git:github.com/o/sinpkg",
@@ -104,6 +109,13 @@ describe("resolveExtensions", () => {
 		expect(resolveExtensions(["pi-lens"], d)).toEqual([join(d.npmNodeModules, "pi-lens", "index.ts")]);
 		expect(resolveExtensions(["pi-commit"], d)).toEqual([join(d.gitRoot, "github.com", "kcurtet", "pi-commit", "index.ts")]);
 		expect(resolveExtensions(["pi-monitor"], d)).toEqual([join(d.gitRoot, "github.com", "kcurtet", "pi-monitor", "index.ts")]);
+	});
+
+	it("npm con scope (@scope/pkg@ver) resuelve y no produce nombres vacíos", () => {
+		const { d } = fixtureDirs();
+		expect(resolveExtensions(["escoped"], d)).toEqual([join(d.npmNodeModules, "@scope", "escoped", "index.ts")]);
+		expect(listExtNames(d)).not.toContain("");
+		expect(listExtNames(d)).toContain("@scope/escoped");
 	});
 	it("extensions[] de settings (path directo) resuelve por basename", () => {
 		const { d, base } = fixtureDirs();
