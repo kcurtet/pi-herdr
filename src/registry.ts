@@ -22,6 +22,8 @@ export interface DispatchRecord {
 	keepOpen: boolean;
 	createdAt: number;
 	status: "live" | "closed";
+	/** Flags pi que recibió el agente (skills/extensiones, spec 002). */
+	piArgs?: string[];
 }
 
 /** Subconjunto de la ExtensionAPI que el registry necesita (seam de tests). */
