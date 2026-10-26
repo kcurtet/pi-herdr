@@ -14,7 +14,7 @@ import {
 	workspaceCreate,
 	type RunFn,
 } from "./herdr.ts";
-import { resolveName } from "./slug.ts";
+import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree } from "./worktree.ts";
@@ -61,11 +61,31 @@ export interface DispatchDeps {
 	getConfig: () => DispatchDefaults;
 }
 
-let nextTaskId = 1;
+/** taskId único considerando los records restaurados (issue #1). */
+function nextTaskId(registry: Registry): string {
+	let max = 0;
+	for (const r of registry.list()) {
+		const m = /^hd-(\d+)$/.exec(r.taskId);
+		if (m) max = Math.max(max, Number(m[1]));
+	}
+	return `hd-${max + 1}`;
+}
 
-/** spawnWait real: herdr agent wait <name>, sin timeout (lo mata el watcher). */
-export function herdrWaitSpawn(name: string): ChildProcess {
-	return spawn("herdr", ["agent", "wait", name], { stdio: ["ignore", "pipe", "pipe"] });
+/** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
+function avoidRegistry(name: string, registry: Registry, live: Set<string>): string {
+	const taken = (n: string): boolean => registry.get(n) !== undefined || live.has(n);
+	if (!taken(name)) return name;
+	for (let i = 2; i <= 99; i++) {
+		const cand = withSuffix(name, `-${i}`);
+		if (!taken(cand)) return cand;
+	}
+	throw new Error(`pi-herdr: sin nombre libre para "${name}" tras 98 colisiones — usa name explicito`);
+}
+
+/** spawnWait real: herdr agent wait <name> [--until working], sin timeout (lo mata el watcher). */
+export function herdrWaitSpawn(name: string, phase: "settle" | "working" = "settle"): ChildProcess {
+	const args = phase === "working" ? ["agent", "wait", name, "--until", "working"] : ["agent", "wait", name];
+	return spawn("herdr", args, { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */
@@ -128,7 +148,8 @@ export async function dispatch(
 	const piArgs = effective.kind === "pi" ? buildPiArgs(effective, deps.resourceDirs) : [];
 
 	const cwd = input.cwd ?? deps.cwd;
-	const name = await resolveName(deps.run, task, input.name);
+	let name = await resolveName(deps.run, task, input.name);
+	name = avoidRegistry(name, deps.registry, await liveNames(deps.run));
 	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
@@ -172,7 +193,7 @@ export async function dispatch(
 
 	const rec: DispatchRecord = {
 		agent: name,
-		taskId: `hd-${nextTaskId++}`,
+		taskId: nextTaskId(deps.registry),
 		topology,
 		targetId,
 		paneId,
