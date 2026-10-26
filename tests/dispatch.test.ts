@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { dispatch, listDispatches, promptAgent, readAgent, type DispatchDeps } from "../src/dispatch.ts";
+import { dispatch, listDispatches, promptAgent, readAgent, waitArgs, type DispatchDeps } from "../src/dispatch.ts";
 import { defaultResourceDirs } from "../src/resources.ts";
 import { saveDefaults, loadDefaults } from "../src/config.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
@@ -467,5 +467,23 @@ describe("dispatch — happy path tab", () => {
 		const closes = calls.filter((c) => c.args[1] === "close");
 		expect(closes.map((c) => c.args)).toEqual([["tab", "close", "w4:t4K"]]);
 		expect(registry.list()).toHaveLength(0);
+	});
+});
+
+describe("waitArgs (herdr agent wait) — issue #7", () => {
+	it("fase settle: sin --until (herdr matchea idle|done|blocked por defecto)", () => {
+		expect(waitArgs("t", "settle")).toEqual(["agent", "wait", "t"]);
+	});
+
+	it("fase arm: --until working blocked done — confirma arranque, captura done/blocked tempranos", () => {
+		expect(waitArgs("t", "arm")).toEqual([
+			"agent", "wait", "t", "--until", "working", "--until", "blocked", "--until", "done",
+		]);
+	});
+
+	it("fase rearm: --until working blocked — JAMÁS done/idle (flood, finding 1 revisión #7)", () => {
+		expect(waitArgs("t", "rearm")).toEqual([
+			"agent", "wait", "t", "--until", "working", "--until", "blocked",
+		]);
 	});
 });

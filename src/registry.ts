@@ -8,7 +8,7 @@ import { agentList, closeTarget, type RunFn } from "./herdr.ts";
 import type { SettleHandler } from "./dispatch.ts";
 import type { EmitFn, CleanupWorktreeFn } from "./settle.ts";
 import type { ChildProcess } from "node:child_process";
-import { armWatcher } from "./watch.ts";
+import { armWatcher, type WaitPhase } from "./watch.ts";
 
 export interface DispatchRecord {
 	agent: string;
@@ -85,7 +85,7 @@ export interface ReconcileDeps {
 	run: RunFn;
 	registry: Registry;
 	cwd: string;
-	spawnWait: (name: string) => ChildProcess;
+	spawnWait: (name: string, phase?: WaitPhase) => ChildProcess;
 	arm: typeof armWatcher;
 	settleFor: (rec: DispatchRecord) => SettleHandler;
 	emit: EmitFn;
