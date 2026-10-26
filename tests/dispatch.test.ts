@@ -129,6 +129,49 @@ describe("dispatch — gates", () => {
 	});
 });
 
+describe("dispatch — topologías", () => {
+	it("pane: split derecha del actual, record target = paneId, args exactos", async () => {
+		const { run, calls } = fakeRun({ ...routes, "pane split": ok(fx("pane-split")) });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login", topology: "pane" }, { HERDR_ENV: "1" });
+		expect(r.paneId).toBe("w4:p5A");
+		expect(calls.find((c) => c.args[1] === "split")!.args).toEqual([
+			"pane",
+			"split",
+			"--current",
+			"--direction",
+			"right",
+			"--cwd",
+			"/repo",
+		]);
+		expect(registry.get(r.agent)).toMatchObject({ topology: "pane", targetId: "w4:p5A", paneId: "w4:p5A" });
+	});
+
+	it("workspace: create con label=name y --no-focus, record target = workspaceId", async () => {
+		const { run, calls } = fakeRun({ ...routes, "workspace create": ok(fx("workspace-create")) });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "revisa el login", topology: "workspace" }, { HERDR_ENV: "1" });
+		expect(r.paneId).toBe("w5:p1");
+		const wsCall = calls.find((c) => c.args[1] === "create")!;
+		expect(wsCall.args).toContain("--no-focus");
+		expect(wsCall.args[wsCall.args.indexOf("--label") + 1]).toBe(r.agent);
+		expect(registry.get(r.agent)).toMatchObject({ topology: "workspace", targetId: "w5", paneId: "w5:p1" });
+	});
+
+	it("prompt falla en topology pane: rollback cierra el PANE (no un tab)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"pane split": ok(fx("pane-split")),
+			"agent prompt": { code: 1, stdout: "", stderr: "boom" },
+		});
+		const { deps } = makeDeps({ run });
+		await expect(dispatch(deps, { task: "revisa el login", topology: "pane" }, { HERDR_ENV: "1" })).rejects.toThrow(/boom/);
+		expect(calls.filter((c) => c.args[1] === "close").map((c) => c.args)).toEqual([["pane", "close", "w4:p5A"]]);
+	});
+});
+
 describe("dispatch — happy path tab", () => {
 	it("secuencia completa: list→tab create (label=name, no-focus, cwd)→start(pi)→prompt(sin wait)→registry→arm", async () => {
 		const { run, calls } = fakeRun(routes);
