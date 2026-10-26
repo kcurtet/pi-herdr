@@ -27,6 +27,9 @@ import {
 	type DispatchRecord,
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
+import { defaultResourceDirs } from "./src/resources.ts";
+import { loadDefaults } from "./src/config.ts";
+import { join } from "node:path";
 
 const DispatchParams = Type.Object(
 	{
@@ -67,6 +70,12 @@ const StopParams = Type.Object(
 export default function herdrExtension(pi: ExtensionAPI) {
 	const registry = new Registry(pi);
 	const watchers = new Map<string, WatchHandle>();
+	const configPath = join(
+		process.env.PI_HOME ?? join(process.env.HOME ?? "/home/user", ".pi", "agent"),
+		"extensions-config",
+		"pi-herdr.json",
+	);
+	const { defaults: configDefaults, warnings: configWarnings } = loadDefaults(configPath);
 
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
@@ -86,7 +95,10 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		arm: armTracked,
 		settleFor: (rec: DispatchRecord) =>
 			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
+		resourceDirs: defaultResourceDirs(process.env),
+		config: configDefaults,
 	};
+	void configWarnings; // T4: /herdr los muestra
 
 	pi.registerTool({
 		name: "herdr_dispatch",
