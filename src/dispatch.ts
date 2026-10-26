@@ -41,6 +41,8 @@ export interface DispatchResult {
 	paneId: string;
 	taskId: string;
 	worktreePath?: string;
+	/** El prompt inicial fue rechazado con agent_blocked (espera aprobación). */
+	initialBlocked?: boolean;
 }
 
 export interface DispatchDeps {
@@ -151,9 +153,10 @@ export async function dispatch(
 		paneId = t.paneId;
 		targetId = t.tabId;
 	}
+	let promptResult: "submitted" | "blocked";
 	try {
 		await agentStart(deps.run, { name, kind: effective.kind, paneId, piArgs });
-		await agentPrompt(deps.run, { name, text: task });
+		promptResult = await agentPrompt(deps.run, { name, text: task });
 	} catch (err) {
 		// sin agente corriendo no hay nada que vigilar: deshacer topología y worktree
 		await closeTarget(deps.run, { kind: topology, id: targetId }).catch(() => undefined);
@@ -188,5 +191,5 @@ export async function dispatch(
 		(ev) => deps.settleFor(rec)(name, ev),
 	);
 	void handle;
-	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir };
+	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, initialBlocked: promptResult === "blocked" || undefined };
 }
