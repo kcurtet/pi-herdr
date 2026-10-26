@@ -7,13 +7,18 @@ function waitJson(status: string): string {
 	return JSON.stringify({ id: "cli:agent:wait", result: { agent: { name: "t", agent_status: status, pane_id: "w1:p1" } } });
 }
 
-/** spawnWait que emite la secuencia de estados indicada (un estado por ciclo de wait). */
+/** spawnWait que emite la secuencia de estados indicada; en fase working el turno "arranca" (issue #7). */
 function waitSeq(states: string[], spawnCount: { n: number }) {
 	let i = 0;
-	return (_name: string): ChildProcess => {
+	return (_name: string, phase?: "settle" | "working"): ChildProcess => {
 		spawnCount.n++;
-		const s = states[Math.min(i, states.length - 1)];
-		i++;
+		let s: string;
+		if (phase === "working") {
+			s = "working";
+		} else {
+			s = states[Math.min(i, states.length - 1)]!;
+			i++;
+		}
 		return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
 	};
 }
@@ -54,7 +59,7 @@ describe("armWatcher", () => {
 		await waitFor(() => events.length > 0, "primer evento");
 		await new Promise((r) => setTimeout(r, 150));
 		expect(events).toEqual([{ kind: "settled", state: "idle", output: "salida final del agente" }]);
-		expect(spawnCount.n).toBe(1);
+		expect(spawnCount.n).toBe(2); // working (arranque) + settle
 	});
 
 	it("blocked re-arma: [blocked, settled] con dos ciclos de wait", async () => {
@@ -64,7 +69,7 @@ describe("armWatcher", () => {
 		await waitFor(() => events.length >= 2, "blocked + settled");
 		expect(events[0]).toEqual({ kind: "blocked" });
 		expect(events[1]).toMatchObject({ kind: "settled", state: "idle" });
-		expect(spawnCount.n).toBe(2);
+		expect(spawnCount.n).toBe(3); // working + settle(blocked) + settle
 	});
 
 	it("done también es settle válido", async () => {
@@ -92,7 +97,7 @@ describe("armWatcher", () => {
 	it("estado desconocido en el JSON → gone", async () => {
 		const { events, onEvent } = collector([true]);
 		const spawnWait = (_n: string): ChildProcess =>
-			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("working")}'; exit 0`]);
+			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("bogus")}'; exit 0`]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length > 0, "gone working");
 		expect(events[0].kind).toBe("gone");
@@ -120,7 +125,7 @@ describe("armWatcher", () => {
 		const { events, onEvent } = collector([true, false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length >= 2, "dos settles");
-		expect(spawnCount.n).toBe(3);
+		expect(spawnCount.n).toBe(4); // working + settle + working + settle
 		expect(events.filter((e) => e.kind === "settled")).toHaveLength(2);
 	});
 
@@ -142,14 +147,22 @@ describe("armWatcher", () => {
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
 		await waitFor(() => events.length >= 2, "settle → working → settle");
 		expect(events.map((e) => e.kind)).toEqual(["settled", "settled"]);
-		expect(phases).toEqual(["settle", "working", "settle"]);
+		expect(phases).toEqual(["working", "settle", "working", "settle"]);
 	});
 
 	it("keepOpen con agente que NO vuelve a trabajar: cero eventos extra (anti hot-loop)", async () => {
 		let spawns = 0;
+		let workingWaits = 0;
 		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
 			spawns++;
-			if (phase === "working") return spawn("bash", ["-c", "sleep 30"]); // bloquea para siempre
+			if (phase === "working") {
+				workingWaits++;
+				if (workingWaits === 1) {
+					// arranque inicial: el turno sí empieza
+					return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("working")}'; exit 0`]);
+				}
+				return spawn("bash", ["-c", "sleep 30"]); // re-arm: bloquea para siempre
+			}
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson("done")}'; exit 0`]);
 		};
 		const { events, onEvent } = collector([true]);
@@ -157,7 +170,39 @@ describe("armWatcher", () => {
 		await waitFor(() => events.length > 0, "primer settle");
 		await new Promise((r) => setTimeout(r, 250));
 		expect(events).toHaveLength(1); // sin spam
-		expect(spawns).toBe(2); // settle + working-wait bloqueado
+		expect(spawns).toBe(3); // working + settle + working-wait bloqueado
 		handle.stop();
+	});
+
+	it("arm inicial en fase working: settle solo tras confirmar que el turno arrancó — issue #7", async () => {
+		const phases: ("settle" | "working" | undefined)[] = [];
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess => {
+			phases.push(phase);
+			const s = phase === "working" ? "working" : "idle";
+			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
+		};
+		const { events, onEvent } = collector([false]);
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "settled tras working");
+		expect(phases[0]).toBe("working");
+		expect(events[0]).toMatchObject({ kind: "settled", state: "idle" });
+	});
+
+	it("fase working inicial con done inmediato → settled(done) sin colgarse — issue #7", async () => {
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess =>
+			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "working" ? "done" : "idle")}'; exit 0`]);
+		const { events, onEvent } = collector([false]);
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "settled done");
+		expect(events[0]).toMatchObject({ kind: "settled", state: "done" });
+	});
+
+	it("fase working inicial con blocked → evento blocked (aprobación temprana) — issue #7", async () => {
+		const spawnWait = (_n: string, phase?: "settle" | "working"): ChildProcess =>
+			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "working" ? "blocked" : "idle")}'; exit 0`]);
+		const { events, onEvent } = collector([false]);
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "blocked");
+		expect(events[0]).toEqual({ kind: "blocked" });
 	});
 });
