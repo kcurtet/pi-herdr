@@ -20,3 +20,5 @@ Task 4: complete (commit e6935fb, tests: npx vitest run → 43/43)
 Task 5: complete (commit 832fdca, tests: npx vitest run → 53/53, typecheck OK)
 Task 6: complete (commit 296c79c, tests: 58/58, typecheck OK)
 Task 7: complete (commit 49df3e6, tests: 62/62, typecheck OK)
+- Ruling T8: merged-check lazy (solo con status limpio se pregunta branch --merged); decideCleanup sigue como tabla de decisión pura usada por cleanupWorktree.
+Task 8: complete (commit e0c76c0, tests: 73/73, typecheck OK)
