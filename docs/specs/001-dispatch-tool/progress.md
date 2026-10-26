@@ -18,3 +18,4 @@ Task 3: complete (commit 2cf10c4, tests: npx vitest run → 35/35)
 - Ruling T4: DispatchDeps toma settleFor+spawnWait inyectables (en vez de emit) — el handler de settle se compone en T5; adapter (ev)=>settle(name,ev).
 Task 4: complete (commit e6935fb, tests: npx vitest run → 43/43)
 Task 5: complete (commit 832fdca, tests: npx vitest run → 53/53, typecheck OK)
+Task 6: complete (commit 296c79c, tests: 58/58, typecheck OK)
