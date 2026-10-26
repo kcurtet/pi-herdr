@@ -75,6 +75,15 @@ describe("buildPiArgs", () => {
 			d.stateExt,
 		]);
 	});
+	it("extensions lista que YA contiene stateExt → un solo -e para él", () => {
+		const d = dirs(true);
+		const args = buildPiArgs(r({ extensions: [d.stateExt] }), d);
+		const count = args.filter((a) => a === d.stateExt).length;
+		expect(count).toBe(1);
+		// sigue habiendo --no-extensions y un único -e por item
+		expect(args).toContain("--no-extensions");
+	});
+
 	it("stateExt ausente → sin -e de exención", () => {
 		const d = dirs(false);
 		expect(buildPiArgs(r({}), d)).toEqual(["--no-skills", "--no-extensions"]);

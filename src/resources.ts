@@ -119,7 +119,10 @@ function resolveExtensionItem(item: string, d: ResourceDirs): string {
 	// 3. packages[]: npm: / git: / local
 	for (const src of settings.packages ?? []) {
 		if (src.startsWith("npm:")) {
-			const name = src.slice(4).split("@")[0]!;
+			// npm:@scope/pkg@ver → @scope/pkg (lastIndexOf respeta el scope)
+			const raw = src.slice(4);
+			const at = raw.lastIndexOf("@");
+			const name = at > 0 ? raw.slice(0, at) : raw;
 			if (name === item || basename(name) === item) {
 				const dir = join(d.npmNodeModules, name);
 				if (existsSync(dir)) return packageEntry(dir);
@@ -186,8 +189,11 @@ export function listExtNames(d: ResourceDirs): string[] {
 	const settings = readSettings(d);
 	for (const entry of settings.extensions ?? []) push(basename(entry).replace(/\.(ts|js)$/, ""));
 	for (const src of settings.packages ?? []) {
-		if (src.startsWith("npm:")) push(src.slice(4).split("@")[0]!);
-		else {
+		if (src.startsWith("npm:")) {
+			const raw = src.slice(4);
+			const at = raw.lastIndexOf("@");
+			push(at > 0 ? raw.slice(0, at) : raw);
+		} else {
 			const parsed = parseGitSource(src);
 			if (parsed) push(parsed.repo);
 		}
