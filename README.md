@@ -56,7 +56,7 @@ o copia/symlink a `~/.pi/agent/extensions/`.
 
 ```
 npm install
-npm test        # vitest: 139 tests (seams RunFn/spawnWait, sin herdr real)
+npm test        # vitest — suite completa (seams RunFn/spawnWait, sin herdr real)
 npm run typecheck
 ```
 
