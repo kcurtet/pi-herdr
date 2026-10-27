@@ -91,6 +91,9 @@ export function waitArgs(name: string, phase: WaitPhase): string[] {
 	if (phase === "rearm") {
 		return ["agent", "wait", name, "--until", "working", "--until", "blocked"];
 	}
+	if (phase === "rearmBlocked") {
+		return ["agent", "wait", name, "--until", "working", "--until", "idle", "--until", "done"];
+	}
 	return ["agent", "wait", name];
 }
 
