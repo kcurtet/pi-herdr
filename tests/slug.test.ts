@@ -31,12 +31,38 @@ describe("slugify", () => {
 	it("palabras cortas y stopwords no cuentan como significativas", () => {
 		expect(slugify("el y de un revisa login")).toBe("revisa-login");
 	});
+	it("task que arranca por dígito → prefijo t- (NAME_RE, issue #15)", () => {
+		expect(slugify("404 handler fix")).toBe("t-404-handler-fix");
+	});
+	it("task de una sola palabra numérica también recibe prefijo", () => {
+		expect(slugify("404")).toBe("t-404");
+	});
+	it("prefijo no empuja el slug por encima de 32 chars ni deja guion final", () => {
+		const s = slugify("4044044044044044044044044044044040"); // palabra numérica de 34 chars
+		expect(s).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+		expect(s.length).toBeLessThanOrEqual(32);
+		expect(s.endsWith("-")).toBe(false);
+	});
 	it("vacío o irrelevante → cadena vacía", () => {
 		expect(slugify("!! ?? el y de")).toBe("");
 	});
 });
 
 describe("resolveName", () => {
+	it("task que arranca por dígito → nombre que cumple NAME_RE y ≤32 chars", async () => {
+		const name = await resolveName(runWithAgents([]), "404 handler fix");
+		expect(name).toBe("t-404-handler-fix");
+		expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+		expect(name.length).toBeLessThanOrEqual(32);
+	});
+	it("task de un solo dígito → nombre válido", async () => {
+		const name = await resolveName(runWithAgents([]), "7");
+		expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+		expect(name.length).toBeLessThanOrEqual(32);
+	});
+	it("tasks normales → slug sin prefijo añadido (pinning)", async () => {
+		expect(await resolveName(runWithAgents([]), "revisa el login")).toBe("revisa-login");
+	});
 	it("sin colisión devuelve el slug tal cual", async () => {
 		const name = await resolveName(runWithAgents(["otro"]), "Revisa el login del admin!!");
 		expect(name).toBe("revisa-login-admin");
