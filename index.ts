@@ -17,7 +17,7 @@ import {
 	type DispatchDeps,
 	type DispatchResult,
 } from "./src/dispatch.ts";
-import { makeSettleHandler, type EmitFn } from "./src/settle.ts";
+import { makeSettleHandler, trackedSettle, type EmitFn } from "./src/settle.ts";
 import { cleanupWorktree } from "./src/worktree.ts";
 import { armWatcher } from "./src/watch.ts";
 import {
@@ -25,7 +25,6 @@ import {
 	reconcile,
 	shutdownCleanup,
 	stopDispatch,
-	type DispatchRecord,
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
@@ -118,8 +117,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		cwd: process.cwd(),
 		spawnWait: herdrWaitSpawn,
 		arm: armTracked,
-		settleFor: (rec: DispatchRecord) =>
-			makeSettleHandler({ run, registry, emit, cleanupWorktree }),
+		settleFor: () => trackedSettle(makeSettleHandler({ run, registry, emit, cleanupWorktree }), watchers),
 		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 		...inject,
@@ -201,10 +199,14 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 
 	// Resume/crash: reconstruir desde la rama activa y reconciliar contra herdr
 	pi.on("session_start", async (_event, ctx) => {
+		const liveRestored: string[] = [];
 		try {
 			const branch = ctx.sessionManager.getBranch() as unknown[];
 			const restored = Registry.fromEntries(branch);
-			for (const rec of restored.list()) registry.adopt(rec);
+			for (const rec of restored.list()) {
+				registry.adopt(rec);
+				if (rec.status === "live") liveRestored.push(rec.agent);
+			}
 			if (restored.list().length > 0) {
 				const reArmed = await reconcile({ ...deps, emit, cleanupWorktree });
 				if (reArmed.length > 0) {
@@ -214,8 +216,19 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 					});
 				}
 			}
-		} catch {
-			// sesión sin herdr vivo o sin entries: nada que re-armar
+		} catch (err) {
+			// Sesión sin herdr vivo (getBranch lanza) o sin entries live restaurados:
+			// nada que re-armar → silencio. PERO si ya adoptamos records live, tragar
+			// el fallo los dejaría vivos sin watcher NI evento, invisibles para siempre
+			// (I4, issue #13): warning visible, sin triggerTurn (sendMessage es legal
+			// aquí — handler de evento, no cuerpo de la factory; rev issues #7/#4).
+			if (liveRestored.length > 0) {
+				pi.sendMessage({
+					customType: "herdr-reconcile-warning",
+					content: `pi-herdr: ⚠ no se pudo re-armar la vigilancia tras resume: ${(err as Error).message}. ${liveRestored.join(", ")} queda(n) live sin watcher: están en herdr_agents — ciérralos con herdr_stop si ya no importan, o re-despacha.`,
+					display: true,
+				});
+			}
 		}
 	});
 

@@ -1,11 +1,12 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { Registry, shutdownCleanup, stopAgent, stopDispatch, type DispatchRecord } from "../src/registry.ts";
 import extension from "../index.ts";
-import { fakeRun, fx, ok } from "./helpers.ts";
+import { fakeRun, fx, ok, waitFor } from "./helpers.ts";
 
 function rec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	return {
@@ -276,6 +277,143 @@ describe("factory de la extensión", () => {
 		expect(boolOrArray(props.extensions)).toBe(true);
 		const required = (t.parameters as { required?: string[] }).required;
 		expect(required).toContain("task");
+	});
+
+	describe("session_start — reconcile tras resume (I4, issue #13)", () => {
+		const liveEntry = {
+			type: "custom",
+			customType: "herdr-dispatch-record",
+			data: {
+				agent: "impl-x",
+				taskId: "hd-1",
+				topology: "tab",
+				targetId: "w4:t4K",
+				paneId: "w4:p4M",
+				cwd: "/repo",
+				keepOpen: false,
+				createdAt: 1,
+				status: "live",
+			},
+		};
+
+		async function runStarts(handlers: ReturnType<typeof fakeApi>["handlers"], branch: unknown, ctx?: unknown): Promise<void> {
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, ctx ?? { sessionManager: { getBranch: () => branch } });
+			}
+		}
+
+		it("entries live restaurados + herdr caído (agent list falla) → warning visible herdr-reconcile-warning, records live SIN watcher", async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "pane" } }), async () => {
+				const { api, tools, handlers, messages } = fakeApi();
+				const { run } = fakeRun({ "agent list": { code: 1, stdout: "", stderr: "herdr caído" } });
+				let spawns = 0;
+				extension(api as never, {
+					run,
+					spawnWait: () => {
+					spawns++;
+					return idleChild();
+				},
+					getConfig: () => ({}),
+				});
+				await runStarts(handlers, [liveEntry]);
+				const warnings = messages.filter((m) => m.msg.customType === "herdr-reconcile-warning");
+				expect(warnings).toHaveLength(1);
+				expect(warnings[0]!.msg.display).toBe(true);
+				expect(warnings[0]!.opts).toBeUndefined(); // sin triggerTurn
+				expect(String(warnings[0]!.msg.content)).toMatch(/no se pudo re-armar/);
+				expect(String(warnings[0]!.msg.content)).toMatch(/impl-x/);
+				expect(String(warnings[0]!.msg.content)).toMatch(/herdr caído/);
+				// nada re-armado, ningún evento de settle
+				expect(messages.filter((m) => m.msg.customType === "herdr-dispatch-event")).toHaveLength(0);
+				expect(spawns).toBe(0);
+				// los records siguen live y visibles
+				const t = tools.find((x) => x.name === "herdr_agents")!;
+				const out = await t.execute!("a", {});
+				expect(out.content[0]!.text).toContain("impl-x");
+				expect(out.content[0]!.text).toContain("live");
+			});
+		});
+
+		it("sin entries (getBranch lanza / rama vacía) + herdr caído: silencio total — pinning", async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "pane" } }), async () => {
+				const { api, handlers, messages } = fakeApi();
+				const { run } = fakeRun({ "agent list": { code: 1, stdout: "", stderr: "x" } });
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				await runStarts(handlers, [], { sessionManager: undefined }); // getBranch lanza TypeError
+				await runStarts(handlers, []); // rama sin entries: reconcile ni se llama
+				expect(messages).toHaveLength(0);
+			});
+		});
+
+		it("entries live + herdr vivo → evento de re-arm con triggerTurn y SIN warning — pinning happy path", async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "pane" } }), async () => {
+				const { api, handlers, messages } = fakeApi();
+				const { run } = fakeRun({
+					"agent list": ok('{"result":{"agents":[{"name":"impl-x","agent_status":"working","pane_id":"w4:p4M"}]}}'),
+				});
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				await runStarts(handlers, [liveEntry]);
+				const evs = messages.filter((m) => m.msg.customType === "herdr-dispatch-event");
+				expect(evs).toHaveLength(1);
+				expect(String(evs[0]!.msg.content)).toMatch(/re-armada/);
+				expect(evs[0]!.opts).toEqual({ triggerTurn: true });
+				expect(messages.filter((m) => m.msg.customType === "herdr-reconcile-warning")).toHaveLength(0);
+			});
+		});
+	});
+
+	describe("herdr_dispatch — wiring del settle vía watcher real (M5, issue #13)", () => {
+		/** ChildProcess falso con EventEmitters reales: el test dispara stdout/close
+		 * para llevar al watcher REAL (armWatcher) hasta el evento settled. */
+		function controllableChild(): ChildProcess {
+			const c = new EventEmitter() as unknown as Record<string, unknown>;
+			c.kill = () => {};
+			c.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+			c.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+			return c as unknown as ChildProcess;
+		}
+
+		it("dispatch → settle definitivo: el evento settled llega con output, close del target y record closed", async () => {
+			await withHerdrEnv(async () => {
+				await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "pane" } }), async () => {
+					const { api, tools, handlers, messages } = fakeApi();
+					const { run, calls } = fakeRun({
+						...dispatchRoutes,
+						"agent read": ok("salida final del agente"),
+						...closeRoutes,
+						});
+					const children: ChildProcess[] = [];
+					extension(api as never, {
+						run,
+						spawnWait: () => {
+							const c = controllableChild();
+							children.push(c);
+							return c;
+						},
+						getConfig: () => ({}),
+					});
+					// sin entries en la rama: el session_start de reconcile no mete ruido
+					for (const h of handlers.filter((x) => x.event === "session_start")) {
+						await h.fn(undefined, { sessionManager: { getBranch: () => [] } });
+						}
+					const t = tools.find((x) => x.name === "herdr_dispatch")!;
+					await t.execute!("c1", { task: "revisa el login" });
+					expect(children).toHaveLength(1); // armado en fase arm
+					const child = children[0] as unknown as { stdout: EventEmitter; emit(e: string, ...a: unknown[]): void };
+					// agente ultra-rápido: done ya en fase arm
+					child.stdout.emit("data", JSON.stringify({ result: { agent: { agent_status: "done" } } }));
+					child.emit("close", 0);
+					await waitFor(() => messages.some((m) => m.msg.customType === "herdr-dispatch-event"), "evento settled");
+					const ev = messages.find((m) => m.msg.customType === "herdr-dispatch-event")!;
+					expect(String(ev.msg.content)).toMatch(/settled \(done\)/);
+					expect(String(ev.msg.content)).toMatch(/salida final del agente/);
+					expect(calls.some((c) => c.args[1] === "close" && c.args[0] === "tab")).toBe(true);
+					// la limpieza del map de watchers (handle fuera al settle definitivo)
+					// se cubre en settle.test.ts (trackedSettle): aquí no es observable
+					// desde fuera de la factory.
+				});
+			});
+		});
 	});
 
 	describe("herdr_dispatch — wiring del content (issue #9)", () => {

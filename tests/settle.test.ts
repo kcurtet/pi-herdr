@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatEvent, makeSettleHandler } from "../src/settle.ts";
+import { formatEvent, makeSettleHandler, trackedSettle } from "../src/settle.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
-import type { WatchEvent } from "../src/watch.ts";
+import type { WatchEvent, WatchHandle } from "../src/watch.ts";
 import type { RunFn } from "../src/herdr.ts";
 import { fakeRun, ok } from "./helpers.ts";
 
@@ -168,6 +168,74 @@ describe("makeSettleHandler — cierre por topología", () => {
 		const ws = setup({ topology: "workspace", targetId: "w5", paneId: "w5:p1" });
 		await ws.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
 		expect(ws.calls[0].args).toEqual(["workspace", "close", "w5"]);
+	});
+});
+
+describe("makeSettleHandler — cleanup de worktree fallido (I2, issue #13)", () => {
+	function setupFailingCleanup() {
+		const { run, calls } = fakeRun({
+			"tab close": ok('{"result":{"type":"ok"}}'),
+			"pane close": ok('{"result":{"type":"ok"}}'),
+			"workspace close": ok('{"result":{"type":"ok"}}'),
+		});
+		const registry = new Registry();
+		registry.add(baseRec({ worktree: { repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
+		const emitted: { content: string; details: Record<string, unknown> }[] = [];
+		const handler = makeSettleHandler({
+			run,
+			registry,
+			emit: (content, details) => emitted.push({ content, details }),
+			cleanupWorktree: async () => {
+				throw new Error("git colgado");
+			},
+		});
+		return { handler, registry, emitted, calls };
+	}
+
+	it("settled: el evento LLEGA con ⚠ nota de error + CONSERVADO, record cierra y close se intenta", async () => {
+		const { handler, registry, emitted, calls } = setupFailingCleanup();
+		const again = await handler("impl-x", { kind: "settled", state: "idle", output: "resultado" });
+		expect(again).toBe(false);
+		expect(emitted).toHaveLength(1);
+		expect(emitted[0].content).toContain("settled (idle)");
+		expect(emitted[0].content).toContain("resultado");
+		expect(emitted[0].content).toMatch(/cleanup de worktree falló: git colgado/);
+		expect(emitted[0].content).toMatch(/CONSERVADO/);
+		expect(emitted[0].content).toMatch(/hd\/impl-x/);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
+	});
+
+	it("gone: el evento gone LLEGA con nota de error, markClosed, sin close del pane", async () => {
+		const { handler, registry, emitted, calls } = setupFailingCleanup();
+		const again = await handler("impl-x", { kind: "gone", reason: "pane cerrado a mano" });
+		expect(again).toBe(false);
+		expect(emitted).toHaveLength(1);
+		expect(emitted[0].content).toContain("pane cerrado a mano");
+		expect(emitted[0].content).toMatch(/cleanup de worktree falló: git colgado/);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("trackedSettle — el map de watchers suelta el handle en cierre definitivo (M5, issue #13)", () => {
+	it("handler false (settled sin keepOpen / gone / ya closed) → elimina el handle del map", async () => {
+		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
+		const wrapped = trackedSettle(async () => false, watchers);
+		expect(await wrapped("impl-x", { kind: "settled", state: "idle", output: "" })).toBe(false);
+		expect(watchers.has("impl-x")).toBe(false);
+	});
+
+	it("handler true (blocked / settled con keepOpen) → el handle queda en el map", async () => {
+		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
+		const wrapped = trackedSettle(async () => true, watchers);
+		expect(await wrapped("impl-x", { kind: "blocked" })).toBe(true);
+		expect(watchers.has("impl-x")).toBe(true);
+	});
+
+	it("agente sin handle en el map: delete no-op, no lanza", async () => {
+		const wrapped = trackedSettle(async () => false, new Map<string, WatchHandle>());
+		await expect(wrapped("fantasma", { kind: "gone", reason: "x" })).resolves.toBe(false);
 	});
 });
 
