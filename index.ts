@@ -84,6 +84,22 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
 	};
 
+	const resourceDirs = defaultResourceDirs(process.env);
+
+	// config ilegible/claves inválidas: aviso visible UNA vez al arrancar.
+	// FUERA del cuerpo de la factory: los action methods (sendMessage) son
+	// stubs que lanzan hasta bindCore() — llamarlo durante la carga tumba toda
+	// la extensión si el config del usuario tiene warnings (rev issue #4, F1).
+	pi.on("session_start", () => {
+		const { warnings } = loadDefaults(configPath);
+		if (warnings.length === 0) return;
+		pi.sendMessage({
+			customType: "herdr-config-warning",
+			content: `pi-herdr: ⚠ config con problemas (esas claves se ignoran): ${warnings.join(" · ")}`,
+			display: true,
+		});
+	});
+
 	const armTracked: typeof armWatcher = (wd, name, onEvent) => {
 		const handle = armWatcher(wd, name, onEvent);
 		watchers.set(name, handle);
@@ -98,7 +114,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		arm: armTracked,
 		settleFor: (rec: DispatchRecord) =>
 			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
-		resourceDirs: defaultResourceDirs(process.env),
+		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 	};
 
@@ -201,7 +217,6 @@ export default function herdrExtension(pi: ExtensionAPI) {
 	});
 
 	// /herdr — defaults configurables (spec 002 D6)
-	const resourceDirs = defaultResourceDirs(process.env);
 	const cmd = makeHerdrCommand({
 		configPath,
 		load: () => loadDefaults(configPath),

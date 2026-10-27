@@ -15,14 +15,17 @@ import {
 	type RunFn,
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
-import { armWatcher, type WatchEvent, type WaitPhase, type WatchHandle } from "./watch.ts";
+import { armWatcher, type WatchEvent, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
-import { createWorktree, cleanupWorktree } from "./worktree.ts";
+import { createWorktree, cleanupWorktree, type WorktreeRef } from "./worktree.ts";
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
+import type { SettleHandler } from "./settle.ts";
 
-export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
+// re-export por compatibilidad: consumers (y tests) históricamente importan
+// el type desde dispatch; la definición canónica vive en settle.ts
+export type { SettleHandler };
 
 export interface DispatchInput {
 	task: string;
@@ -170,7 +173,7 @@ export async function dispatch(
 	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
-	let worktree: { repo: string; dir: string; branch: string } | undefined;
+	let worktree: WorktreeRef | undefined;
 	if (input.worktree === true) {
 		worktree = await createWorktree(deps.run, { repo: cwd, name });
 	}
@@ -223,11 +226,10 @@ export async function dispatch(
 	};
 	deps.registry.add(rec);
 
-	const handle: WatchHandle = deps.arm(
+	deps.arm(
 		{ run: deps.run, spawnWait: deps.spawnWait },
 		name,
 		(ev) => deps.settleFor(rec)(name, ev),
 	);
-	void handle;
 	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, initialBlocked: promptResult === "blocked" || undefined };
 }

@@ -3,20 +3,15 @@
  * interactivo y autocompletado. Patrón turnkit.
  */
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import type { DispatchDefaults } from "./config.ts";
+import { BUILTIN as DEFAULTS, TOPOLOGIES, type DispatchDefaults } from "./config.ts";
 
 export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
-const TOPOLOGIES = ["tab", "pane", "workspace"] as const;
-const BUILTIN: Record<ConfigKey, string> = {
-	skills: "false",
-	extensions: "false",
-	topology: "tab",
-	kind: "pi",
-	keepOpen: "false",
-	worktree: "false",
-};
+/** Display del builtin por key, DERIVADO de config.ts (única fuente de verdad). */
+const BUILTIN: Record<ConfigKey, string> = Object.fromEntries(
+	CONFIG_KEYS.map((key) => [key, fmt(DEFAULTS[key])]),
+) as Record<ConfigKey, string>;
 
 export interface CommandDeps {
 	configPath: string;
@@ -39,32 +34,54 @@ function fmt(v: unknown): string {
 	return Array.isArray(v) ? `[${v.join(", ")}]` : String(v);
 }
 
-/** Parsea el valor textual según el key; devuelve undefined si es inválido. */
-function parseValue(key: ConfigKey, raw: string, deps: CommandDeps): DispatchDefaults[ConfigKey] | undefined {
-	if (key === "skills" || key === "extensions") {
-		if (raw === "true" || raw === "false") return raw === "true";
-		const list = raw.split(/[,\s]+/).filter(Boolean);
-		return list.length > 0 ? list : undefined;
-	}
-	if (key === "topology") return (TOPOLOGIES as readonly string[]).includes(raw) ? (raw as DispatchDefaults["topology"]) : undefined;
-	if (key === "kind") return raw.length > 0 ? raw : undefined;
+/** Cómo se parsea y qué opciones tiene cada key de config. */
+interface ValueSpec {
+	/** Parsea el valor textual según el key; undefined si es inválido. */
+	parse: (raw: string) => DispatchDefaults[ConfigKey] | undefined;
+	/** Opciones válidas (wizard/autocompletado); algunas dependen de deps. */
+	options: (deps: CommandDeps) => string[];
+}
+
+const parseListOrBool = (raw: string): boolean | string[] | undefined => {
 	if (raw === "true" || raw === "false") return raw === "true";
+	const list = raw.split(/[,\s]+/).filter(Boolean);
+	return list.length > 0 ? list : undefined;
+};
+
+const parseBool = (raw: string): boolean | undefined =>
+	raw === "true" || raw === "false" ? raw === "true" : undefined;
+
+/** Tabla por key: única fuente para parse y options (adiós switches paralelos). */
+const VALUE_SPECS: Record<ConfigKey, ValueSpec> = {
+	skills: { parse: parseListOrBool, options: (d) => ["true", "false", ...d.skillNames()] },
+	extensions: { parse: parseListOrBool, options: (d) => ["true", "false", ...d.extNames()] },
+	topology: {
+		parse: (raw) => ((TOPOLOGIES as readonly string[]).includes(raw) ? raw : undefined),
+		options: () => [...TOPOLOGIES],
+	},
+	kind: { parse: (raw) => (raw.length > 0 ? raw : undefined), options: (d) => [...d.kinds] },
+	keepOpen: { parse: parseBool, options: () => ["true", "false"] },
+	worktree: { parse: parseBool, options: () => ["true", "false"] },
+};
+
+/** Key de config válido, o notify de error (reset y config comparten). */
+function asConfigKey(raw: string, ctx: CommandCtxLike): ConfigKey | undefined {
+	if ((CONFIG_KEYS as readonly string[]).includes(raw)) return raw as ConfigKey;
+	ctx.ui.notify(`pi-herdr: key desconocida "${raw}" (${CONFIG_KEYS.join(", ")})`, "error");
 	return undefined;
 }
 
-function valueOptions(key: ConfigKey, deps: CommandDeps): string[] {
-	switch (key) {
-		case "skills":
-			return ["true", "false", ...deps.skillNames()];
-		case "extensions":
-			return ["true", "false", ...deps.extNames()];
-		case "topology":
-			return [...TOPOLOGIES];
-		case "kind":
-			return [...deps.kinds];
-		default:
-			return ["true", "false"];
-	}
+/** Persiste value bajo un key válido y notifica (wizard y config directo comparten). */
+function saveValue(
+	deps: CommandDeps,
+	key: ConfigKey,
+	value: DispatchDefaults[ConfigKey],
+	ctx: CommandCtxLike,
+): void {
+	const current = deps.load().defaults;
+	(current as Record<string, unknown>)[key] = value;
+	deps.save(current);
+	ctx.ui.notify(`pi-herdr: ${key} = ${fmt(value)} (config)`, "info");
 }
 
 function statusText(deps: CommandDeps): string {
@@ -91,19 +108,16 @@ async function wizard(deps: CommandDeps, ctx: CommandCtxLike): Promise<void> {
 		const key = await ctx.ui.select("pi-herdr — default a configurar", [...CONFIG_KEYS, "Done"]);
 		if (key === undefined || key === "Done") return;
 		const k = key as ConfigKey;
-		const opts = valueOptions(k, deps);
+		const opts = VALUE_SPECS[k].options(deps);
 		const hint = k === "skills" || k === "extensions" ? " (listas: /herdr config <key> a,b)" : "";
 		const value = await ctx.ui.select(`pi-herdr — ${k}${hint}`, [...opts, "Back"]);
 		if (value === undefined || value === "Back") continue;
-		const parsed = parseValue(k, value, deps);
+		const parsed = VALUE_SPECS[k].parse(value);
 		if (parsed === undefined) {
 			ctx.ui.notify(`pi-herdr: valor "${value}" no válido para ${k}`, "error");
 			continue;
 		}
-		const current = deps.load().defaults;
-		(current as Record<string, unknown>)[key] = parsed;
-		deps.save(current);
-		ctx.ui.notify(`pi-herdr: ${k} = ${fmt(parsed)} (config)`, "info");
+		saveValue(deps, k, parsed, ctx);
 	}
 }
 
@@ -117,11 +131,9 @@ function makeHandler(deps: CommandDeps) {
 		if (parts[0] === "reset") {
 			const current = deps.load().defaults;
 			if (parts[1]) {
-				if (!(CONFIG_KEYS as readonly string[]).includes(parts[1])) {
-					ctx.ui.notify(`pi-herdr: key desconocida "${parts[1]}" (${CONFIG_KEYS.join(", ")})`, "error");
-					return;
-				}
-				delete current[parts[1] as ConfigKey];
+				const key = asConfigKey(parts[1], ctx);
+				if (!key) return;
+				delete current[key];
 				deps.save(current);
 				ctx.ui.notify(`pi-herdr: ${parts[1]} vuelto a builtin`, "info");
 			} else {
@@ -139,25 +151,19 @@ function makeHandler(deps: CommandDeps) {
 				await wizard(deps, ctx);
 				return;
 			}
-			const key = parts[1]!;
-			if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
-				ctx.ui.notify(`pi-herdr: key desconocida "${key}" (${CONFIG_KEYS.join(", ")})`, "error");
-				return;
-			}
+			const key = asConfigKey(parts[1]!, ctx);
+			if (!key) return;
 			const raw = parts.slice(2).join(" ");
 			if (!raw) {
-				ctx.ui.notify(`pi-herdr: falta el valor. Opciones: ${valueOptions(key as ConfigKey, deps).join(" | ")}`, "error");
+				ctx.ui.notify(`pi-herdr: falta el valor. Opciones: ${VALUE_SPECS[key].options(deps).join(" | ")}`, "error");
 				return;
 			}
-			const parsed = parseValue(key as ConfigKey, raw, deps);
+			const parsed = VALUE_SPECS[key].parse(raw);
 			if (parsed === undefined) {
 				ctx.ui.notify(`pi-herdr: valor "${raw}" no válido para ${key}`, "error");
 				return;
 			}
-			const current = deps.load().defaults;
-			(current as Record<string, unknown>)[key] = parsed;
-			deps.save(current);
-			ctx.ui.notify(`pi-herdr: ${key} = ${fmt(parsed)} (config)`, "info");
+			saveValue(deps, key, parsed, ctx);
 			return;
 		}
 		ctx.ui.notify(`pi-herdr: subcomando desconocido "${parts[0]}" (config | reset)`, "error");
@@ -187,7 +193,7 @@ function makeCompletions(deps: CommandDeps) {
 		}
 		if (position === 2 && sub === "config") {
 			const key = realTokens[1] as ConfigKey;
-			if ((CONFIG_KEYS as readonly string[]).includes(key)) return build(valueOptions(key, deps));
+			if ((CONFIG_KEYS as readonly string[]).includes(key)) return build(VALUE_SPECS[key].options(deps));
 			return null;
 		}
 		return null;

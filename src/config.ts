@@ -24,7 +24,7 @@ export interface ResolvedDefaults {
 	worktree: boolean;
 }
 
-const BUILTIN: ResolvedDefaults = {
+export const BUILTIN: ResolvedDefaults = {
 	skills: false,
 	extensions: false,
 	topology: "tab",
@@ -33,7 +33,7 @@ const BUILTIN: ResolvedDefaults = {
 	worktree: false,
 };
 
-const TOPOLOGIES = ["tab", "pane", "workspace"] as const;
+export const TOPOLOGIES = ["tab", "pane", "workspace"] as const;
 
 function validSkillValue(v: unknown): boolean {
 	return v === true || v === false || (Array.isArray(v) && v.every((x) => typeof x === "string" && x.length > 0));
