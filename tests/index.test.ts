@@ -1,10 +1,11 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { Registry, shutdownCleanup, stopAgent, stopDispatch, type DispatchRecord } from "../src/registry.ts";
 import extension from "../index.ts";
-import { fakeRun, ok } from "./helpers.ts";
+import { fakeRun, fx, ok } from "./helpers.ts";
 
 function rec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	return {
@@ -25,6 +26,13 @@ const closeRoutes = {
 	"tab close": ok('{"result":{"type":"ok"}}'),
 	"pane close": ok('{"result":{"type":"ok"}}'),
 	"workspace close": ok('{"result":{"type":"ok"}}'),
+};
+
+const dispatchRoutes = {
+	"agent list": ok('{"id":"x","result":{"agents":[]},"type":"agent_list"}'),
+	"tab create": ok(fx("tab-create")),
+	"agent start": ok('{"result":{"type":"ok"}}'),
+	"agent prompt": ok('{"result":{"type":"ok"}}'),
 };
 
 const noCleanup = async () => ({ removed: true }) as const;
@@ -83,13 +91,27 @@ describe("stopAgent (herdr_stop)", () => {
 		const registry = new Registry();
 		registry.add(rec({ worktree: { repo: "/r", dir: "/d", branch: "hd/impl-x" } }));
 		const cleanups: string[] = [];
-		await stopAgent(
+		const msg = await stopAgent(
 			{ run, registry, cleanupWorktree: async (_r, o) => { cleanups.push(o.dir); return { removed: true }; } },
 			"impl-x",
 		);
 		expect(cleanups).toEqual(["/d"]);
 		expect(calls[0].args).toEqual(["tab", "close", "w4:t4K"]);
 		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(msg).toMatch(/detenido y tab cerrado/);
+	});
+
+	it("close fallido: el mensaje NO afirma 'cerrado' y reporta el error del close (issue #9)", async () => {
+		const { run, calls } = fakeRun({ ...closeRoutes, "tab close": { code: 1, stdout: "", stderr: "close-boom" } });
+		const registry = new Registry();
+		registry.add(rec());
+		const msg = await stopAgent({ run, registry, cleanupWorktree: noCleanup }, "impl-x");
+		expect(calls.map((c) => c.args)).toEqual([["tab", "close", "w4:t4K"]]); // close intentado igual
+		expect(registry.get("impl-x")!.status).toBe("closed"); // record cerrado (idempotencia)
+		expect(msg).toMatch(/impl-x/);
+		expect(msg).toMatch(/detenido/);
+		expect(msg).not.toMatch(/cerrado/);
+		expect(msg).toMatch(/close-boom/);
 	});
 
 	it("desconocido o ya cerrado: error claro", async () => {
@@ -121,14 +143,39 @@ describe("stopDispatch (herdr_stop wiring)", () => {
 });
 
 describe("factory de la extensión", () => {
+	/** ChildProcess inerte para spawnWait: sin stdout/stderr, nunca emite —
+	 * el watcher queda armado sin tocar herdr real. */
+	const idleChild = (): ChildProcess => ({ on() {}, kill() {} }) as unknown as ChildProcess;
+
+	/** execute de herdr_dispatch pasa process.env: HERDR_ENV=1 solo durante el test. */
+	async function withHerdrEnv(fn: () => Promise<void> | void): Promise<void> {
+		const prev = process.env.HERDR_ENV;
+		process.env.HERDR_ENV = "1";
+		try {
+			await fn();
+		} finally {
+			if (prev === undefined) delete process.env.HERDR_ENV;
+			else process.env.HERDR_ENV = prev;
+		}
+	}
+
+	type ToolReg = {
+		name: string;
+		parameters: Record<string, unknown>;
+		execute?: (id: string, params: Record<string, unknown>) => Promise<{
+			content: { type: string; text: string }[];
+			details?: Record<string, unknown>;
+		}>;
+	};
+
 	function fakeApi(opts: { sendMessageThrows?: boolean } = {}) {
-		const tools: { name: string; parameters: Record<string, unknown> }[] = [];
+		const tools: ToolReg[] = [];
 		const handlers: { event: string; fn: (event: unknown, ctx: unknown) => Promise<void> | void }[] = [];
 		const commands: { name: string; description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }[] = [];
 		const messages: { msg: Record<string, unknown>; opts?: unknown }[] = [];
 		return {
 			api: {
-				registerTool: (t: { name: string; parameters: Record<string, unknown> }) => tools.push(t),
+				registerTool: (t: ToolReg) => tools.push(t),
 				on: (event: string, fn: (event: unknown, ctx: unknown) => Promise<void> | void) => handlers.push({ event, fn }),
 				registerCommand: (name: string, def: { description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }) =>
 					commands.push({ name, ...def }),
@@ -229,6 +276,38 @@ describe("factory de la extensión", () => {
 		expect(boolOrArray(props.extensions)).toBe(true);
 		const required = (t.parameters as { required?: string[] }).required;
 		expect(required).toContain("task");
+	});
+
+	describe("herdr_dispatch — wiring del content (issue #9)", () => {
+		it("prompt inicial agent_blocked: el CONTENT de la tool menciona blocked", async () => {
+			await withHerdrEnv(async () => {
+				const { api, tools } = fakeApi();
+				const { run } = fakeRun({
+					...dispatchRoutes,
+					"agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" },
+				});
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				const out = await t.execute!("c1", { task: "revisa el login" });
+				const text = out.content[0]!.text;
+				expect(text).toMatch(/Despachado revisa-login/);
+				expect(text).toMatch(/blocked/);
+				expect(out.details).toMatchObject({ agent: "revisa-login", initialBlocked: true });
+			});
+		});
+
+		it("prompt inicial submitted: content normal, SIN mención a blocked/aprobación", async () => {
+			await withHerdrEnv(async () => {
+				const { api, tools } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				const out = await t.execute!("c1", { task: "revisa el login" });
+				const text = out.content[0]!.text;
+				expect(text).toMatch(/Despachado revisa-login/);
+				expect(text).not.toMatch(/blocked|aprobaci/i);
+			});
+		});
 	});
 
 	it("registra el comando /herdr con autocompletado", () => {

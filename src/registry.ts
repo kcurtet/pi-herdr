@@ -142,23 +142,31 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 	return reArmed;
 }
 
-/** Cierre de un record vivo (shutdown/stop): close best-effort + markClosed. */
-export async function closeRecord(run: RunFn, rec: DispatchRecord): Promise<void> {
-	await closeTarget(run, { kind: rec.topology, id: rec.targetId }).catch(() => undefined);
+/** Cierre best-effort del target topológico: devuelve el error si falla (lo decide el caller). */
+export async function closeRecord(run: RunFn, rec: DispatchRecord): Promise<Error | undefined> {
+	try {
+		await closeTarget(run, { kind: rec.topology, id: rec.targetId });
+	} catch (err) {
+		return err as Error;
+	}
+	return undefined;
 }
 
 /**
  * Abandona un despacho vivo: cleanup del worktree pendiente (best-effort) +
  * close del target topológico (salvo close=false: el target ya no existe,
  * p.ej. agente muerto en reconcile) + markClosed. Idempotente por estado.
+ * Devuelve el error del close si falló: el caller decide cómo reportarlo
+ * (stopAgent lo menciona; shutdownCleanup/reconcile lo tragan a propósito).
  */
-async function abandonDispatch(deps: CleanupDeps, rec: DispatchRecord, close = true): Promise<void> {
+async function abandonDispatch(deps: CleanupDeps, rec: DispatchRecord, close = true): Promise<Error | undefined> {
 	if (rec.worktree) {
 		await deps.cleanupWorktree(deps.run, rec.worktree).catch(() => undefined);
 		rec.worktree = undefined;
 	}
-	if (close) await closeRecord(deps.run, rec);
+	const closeErr = close ? await closeRecord(deps.run, rec) : undefined;
 	deps.registry.markClosed(rec.agent);
+	return closeErr;
 }
 
 export interface CleanupDeps {
@@ -172,7 +180,11 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
 	const rec = deps.registry.get(agent);
 	if (!rec) throw new Error(`pi-herdr: despacho "${agent}" no encontrado. Usa herdr_agents para listar.`);
 	if (rec.status === "closed") throw new Error(`pi-herdr: "${agent}" ya está cerrado.`);
-	await abandonDispatch(deps, rec);
+	const closeErr = await abandonDispatch(deps, rec);
+	if (closeErr) {
+		// issue #9: jamás afirmar 'cerrado' si el close falló — la tab puede seguir abierta
+		return `Despacho ${agent} detenido; ojo: close de ${rec.topology} ${rec.targetId} falló — ${closeErr.message}. Revisa la tab a mano.`;
+	}
 	return `Despacho ${agent} detenido y ${rec.topology} cerrado.`;
 }
 

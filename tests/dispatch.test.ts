@@ -487,6 +487,34 @@ describe("dispatch — happy path tab", () => {
 	});
 });
 
+describe("dispatch — rollback con close fallido (issue #9)", () => {
+	it("start lanza y close de rollback también: el Error menciona AMBOS fallos", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent start": { code: 1, stdout: "", stderr: "start-boom" },
+			"tab close": { code: 1, stdout: "", stderr: "close-boom" },
+		});
+		const { deps } = makeDeps({ run });
+		await expect(dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/start-boom[\s\S]*close de tab w4:t4K falló[\s\S]*close-boom[\s\S]*revisa la tab/,
+		);
+		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1); // close intentado
+	});
+
+	it("close de rollback OK: el error solo menciona el fallo original, sin nota de close", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "boom" } });
+		const { deps } = makeDeps({ run });
+		let msg = "no lanzó";
+		try {
+			await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		} catch (e) {
+			msg = (e as Error).message;
+		}
+		expect(msg).toMatch(/boom/);
+		expect(msg).not.toMatch(/close de tab/);
+	});
+});
+
 describe("dispatch — taskId bajo concurrencia (issue #6)", () => {
 	/** RunFn con barrera: el n-ésimo `agent prompt` espera a que lleguen todos
 	 * los esperados antes de resolver → máximo solape entre dispatch en vuelo. */
