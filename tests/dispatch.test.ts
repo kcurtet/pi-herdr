@@ -533,4 +533,10 @@ describe("waitArgs (herdr agent wait) — issue #7", () => {
 			"agent", "wait", "t", "--until", "working", "--until", "blocked",
 		]);
 	});
+
+	it("fase rearmBlocked: --until working idle done — JAMÁS blocked (hot-loop, issue #8)", () => {
+		expect(waitArgs("t", "rearmBlocked")).toEqual([
+			"agent", "wait", "t", "--until", "working", "--until", "idle", "--until", "done",
+		]);
+	});
 });
