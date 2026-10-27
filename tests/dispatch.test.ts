@@ -487,6 +487,52 @@ describe("dispatch — happy path tab", () => {
 	});
 });
 
+describe("dispatch — topología de la sesión, no la enfocada (issue #11)", () => {
+	it("topology tab con HERDR_WORKSPACE_ID: tab create lleva --workspace <id> antes de --cwd", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run });
+		await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w13" });
+		expect(calls.find((c) => c.args[1] === "create")!.args).toEqual([
+			"tab", "create", "--workspace", "w13", "--cwd", "/repo", "--label", "revisa-login", "--no-focus",
+		]);
+	});
+
+	it("topology pane con HERDR_PANE_ID: split con PANE_ID posicional, SIN --current", async () => {
+		const { run, calls } = fakeRun({ ...routes, "pane split": ok(fx("pane-split")) });
+		const { deps } = makeDeps({ run });
+		await dispatch(deps, { task: "revisa el login", topology: "pane" }, { HERDR_ENV: "1", HERDR_PANE_ID: "w13:pW" });
+		expect(calls.find((c) => c.args[1] === "split")!.args).toEqual([
+			"pane", "split", "w13:pW", "--direction", "right", "--cwd", "/repo",
+		]);
+	});
+
+	it("env sin HERDR_WORKSPACE_ID/HERDR_PANE_ID: args byte-idénticos a los actuales (backwards compat)", async () => {
+		const { run, calls } = fakeRun({ ...routes, "pane split": ok(fx("pane-split")) });
+		const { deps } = makeDeps({ run });
+		await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(calls.find((c) => c.args[1] === "create")!.args).toEqual([
+			"tab", "create", "--cwd", "/repo", "--label", "revisa-login", "--no-focus",
+		]);
+		await dispatch(deps, { task: "arregla el pago", topology: "pane" }, { HERDR_ENV: "1" });
+		expect(calls.find((c) => c.args[1] === "split")!.args).toEqual([
+			"pane", "split", "--current", "--direction", "right", "--cwd", "/repo",
+		]);
+	});
+
+	it("topology workspace ignora HERDR_WORKSPACE_ID/HERDR_PANE_ID: workspace create sin cambios (non-goal)", async () => {
+		const { run, calls } = fakeRun({ ...routes, "workspace create": ok(fx("workspace-create")) });
+		const { deps } = makeDeps({ run });
+		await dispatch(
+			deps,
+			{ task: "revisa el login", topology: "workspace" },
+			{ HERDR_ENV: "1", HERDR_WORKSPACE_ID: "w13", HERDR_PANE_ID: "w13:pW" },
+		);
+		expect(calls.find((c) => c.args[1] === "create")!.args).toEqual([
+			"workspace", "create", "--cwd", "/repo", "--label", "revisa-login", "--no-focus",
+		]);
+	});
+});
+
 describe("dispatch — rollback con close fallido (issue #9)", () => {
 	it("start lanza y close de rollback también: el Error menciona AMBOS fallos", async () => {
 		const { run, calls } = fakeRun({

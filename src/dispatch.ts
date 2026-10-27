@@ -182,18 +182,20 @@ export async function dispatch(
 	}
 	const agentCwd = worktree?.dir ?? cwd;
 
-	// topología → paneId (dónde vive el agente) + targetId (qué se cierra)
+	// topología → paneId (dónde vive el agente) + targetId (qué se cierra).
+	// issue #11: tab/pane anclan al workspace/pane de ESTA sesión (env de herdr),
+	// no al que el usuario tenga enfocado; env ausente → comportamiento histórico.
 	let paneId: string;
 	let targetId: string;
 	if (topology === "pane") {
-		paneId = (await paneSplitRight(deps.run, { cwd: agentCwd })).paneId;
+		paneId = (await paneSplitRight(deps.run, { cwd: agentCwd, pane: env.HERDR_PANE_ID })).paneId;
 		targetId = paneId;
 	} else if (topology === "workspace") {
 		const w = await workspaceCreate(deps.run, { cwd: agentCwd, label: name });
 		paneId = w.paneId;
 		targetId = w.workspaceId;
 	} else {
-		const t = await tabCreate(deps.run, { cwd: agentCwd, label: name });
+		const t = await tabCreate(deps.run, { cwd: agentCwd, label: name, workspace: env.HERDR_WORKSPACE_ID });
 		paneId = t.paneId;
 		targetId = t.tabId;
 	}
