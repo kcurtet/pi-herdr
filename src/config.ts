@@ -74,6 +74,23 @@ export function loadDefaults(path: string): { defaults: DispatchDefaults; warnin
 	}
 }
 
+/**
+ * Defaults CRUDOS del fichero, sin filtrar (M2): lo que hay en disco, incluidas
+ * claves inválidas o desconocidas que loadDefaults descarta al cargar. Base
+ * para reescribir el fichero sin mutar claves ajenas al cambio pedido.
+ * Fichero inexistente, ilegible o sin objeto `defaults` → {}.
+ */
+export function loadRawDefaults(path: string): DispatchDefaults {
+	if (!existsSync(path)) return {};
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as { defaults?: unknown };
+		const d = parsed?.defaults;
+		return d && typeof d === "object" && !Array.isArray(d) ? (d as DispatchDefaults) : {};
+	} catch {
+		return {};
+	}
+}
+
 export function saveDefaults(path: string, d: DispatchDefaults): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify({ defaults: d }, null, "\t") + "\n");

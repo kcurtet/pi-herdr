@@ -3,7 +3,7 @@
  * interactivo y autocompletado. Patrón turnkit.
  */
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import { BUILTIN as DEFAULTS, TOPOLOGIES, type DispatchDefaults } from "./config.ts";
+import { BUILTIN as DEFAULTS, TOPOLOGIES, loadRawDefaults, type DispatchDefaults } from "./config.ts";
 
 export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -71,16 +71,21 @@ function asConfigKey(raw: string, ctx: CommandCtxLike): ConfigKey | undefined {
 	return undefined;
 }
 
-/** Persiste value bajo un key válido y notifica (wizard y config directo comparten). */
+/**
+ * Persiste value bajo un key válido y notifica (wizard y config directo comparten).
+ * M2: el merge se hace sobre los defaults CRUDOS del fichero (loadRawDefaults),
+ * no sobre los filtrados por loadDefaults, para no borrar claves inválidas o
+ * desconocidas que el usuario tenga en disco (siguen ignorándose al cargar).
+ */
 function saveValue(
 	deps: CommandDeps,
 	key: ConfigKey,
 	value: DispatchDefaults[ConfigKey],
 	ctx: CommandCtxLike,
 ): void {
-	const current = deps.load().defaults;
-	(current as Record<string, unknown>)[key] = value;
-	deps.save(current);
+	const next = { ...loadRawDefaults(deps.configPath) } as Record<string, unknown>;
+	next[key] = value;
+	deps.save(next as DispatchDefaults);
 	ctx.ui.notify(`pi-herdr: ${key} = ${fmt(value)} (config)`, "info");
 }
 
@@ -129,12 +134,13 @@ function makeHandler(deps: CommandDeps) {
 			return;
 		}
 		if (parts[0] === "reset") {
-			const current = deps.load().defaults;
 			if (parts[1]) {
 				const key = asConfigKey(parts[1], ctx);
 				if (!key) return;
-				delete current[key];
-				deps.save(current);
+				// M2: borra SOLO ese key del fichero crudo; el resto queda intacto
+				const next = { ...loadRawDefaults(deps.configPath) } as Record<string, unknown>;
+				delete next[key];
+				deps.save(next as DispatchDefaults);
 				ctx.ui.notify(`pi-herdr: ${parts[1]} vuelto a builtin`, "info");
 			} else {
 				deps.save({});
