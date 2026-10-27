@@ -87,6 +87,29 @@ function saveValue(
 	next[key] = value;
 	deps.save(next as DispatchDefaults);
 	ctx.ui.notify(`pi-herdr: ${key} = ${fmt(value)} (config)`, "info");
+	warnIfUndispatchable(key, next, ctx);
+}
+
+/**
+ * M3: kind≠pi + skills/extensions en config no despacha (gate D4 de dispatch:
+ * cualquier valor de skills/extensions — incluso false — dispara el error). Avisa
+ * al setear una de las partes de la combinación; no rechaza (kind≠pi + sin
+ * recursos en config sí despacha). kind sin setear cuenta el builtin "pi".
+ */
+function warnIfUndispatchable(
+	key: ConfigKey,
+	next: Record<string, unknown>,
+	ctx: CommandCtxLike,
+): void {
+	const touchesCombo = key === "skills" || key === "extensions" || key === "kind";
+	const kind = typeof next.kind === "string" && next.kind.length > 0 ? next.kind : DEFAULTS.kind;
+	const hasResources = next.skills !== undefined || next.extensions !== undefined;
+	if (touchesCombo && kind !== DEFAULTS.kind && hasResources) {
+		ctx.ui.notify(
+			`pi-herdr: ⚠ combinación no despachable: kind "${kind}" + skills/extensions en config — todo herdr_dispatch fallará el gate "skills/extensions solo aplican a kind pi". Quita skills/extensions (reset skills/reset extensions) o usa kind pi.`,
+			"warning",
+		);
+	}
 }
 
 function statusText(deps: CommandDeps): string {
