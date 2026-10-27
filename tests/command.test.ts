@@ -112,6 +112,28 @@ describe("/herdr config — preservación de claves crudas (M2)", () => {
 	});
 });
 
+describe("/herdr config — aviso de combinación no despachable (M3)", () => {
+	it("set skills con kind≠pi configurado → warning", async () => {
+		const { cmd, ctx, notifies, configPath } = setup({ kind: "claude" });
+		await cmd.handler("config skills true", ctx);
+		expect(read(configPath)).toEqual({ kind: "claude", skills: true });
+		const warn = notifies.find((n) => n.level === "warning");
+		expect(warn?.msg).toMatch(/skills\/extensions.*kind|kind.*skills\/extensions/s);
+	});
+	it("set kind≠pi con skills configuradas → warning (viceversa)", async () => {
+		const { cmd, ctx, notifies } = setup({ skills: ["writing-specs"] });
+		await cmd.handler("config kind claude", ctx);
+		const warn = notifies.find((n) => n.level === "warning");
+		expect(warn?.msg).toMatch(/skills\/extensions.*kind|kind.*skills\/extensions/s);
+	});
+	it("kind pi (o sin skills) → sin warning", async () => {
+		const { cmd, ctx, notifies } = setup({ skills: true });
+		await cmd.handler("config kind pi", ctx);
+		await cmd.handler("config keepOpen true", ctx);
+		expect(notifies.some((n) => n.level === "warning")).toBe(false);
+	});
+});
+
 describe("/herdr reset", () => {
 	it("reset total y por key", async () => {
 		const { cmd, ctx, configPath } = setup({ skills: true, topology: "pane" });
