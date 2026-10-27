@@ -171,6 +171,53 @@ describe("makeSettleHandler — cierre por topología", () => {
 	});
 });
 
+describe("makeSettleHandler — cleanup de worktree fallido (I2, issue #13)", () => {
+	function setupFailingCleanup() {
+		const { run, calls } = fakeRun({
+			"tab close": ok('{"result":{"type":"ok"}}'),
+			"pane close": ok('{"result":{"type":"ok"}}'),
+			"workspace close": ok('{"result":{"type":"ok"}}'),
+		});
+		const registry = new Registry();
+		registry.add(baseRec({ worktree: { repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
+		const emitted: { content: string; details: Record<string, unknown> }[] = [];
+		const handler = makeSettleHandler({
+			run,
+			registry,
+			emit: (content, details) => emitted.push({ content, details }),
+			cleanupWorktree: async () => {
+				throw new Error("git colgado");
+			},
+		});
+		return { handler, registry, emitted, calls };
+	}
+
+	it("settled: el evento LLEGA con ⚠ nota de error + CONSERVADO, record cierra y close se intenta", async () => {
+		const { handler, registry, emitted, calls } = setupFailingCleanup();
+		const again = await handler("impl-x", { kind: "settled", state: "idle", output: "resultado" });
+		expect(again).toBe(false);
+		expect(emitted).toHaveLength(1);
+		expect(emitted[0].content).toContain("settled (idle)");
+		expect(emitted[0].content).toContain("resultado");
+		expect(emitted[0].content).toMatch(/cleanup de worktree falló: git colgado/);
+		expect(emitted[0].content).toMatch(/CONSERVADO/);
+		expect(emitted[0].content).toMatch(/hd\/impl-x/);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
+	});
+
+	it("gone: el evento gone LLEGA con nota de error, markClosed, sin close del pane", async () => {
+		const { handler, registry, emitted, calls } = setupFailingCleanup();
+		const again = await handler("impl-x", { kind: "gone", reason: "pane cerrado a mano" });
+		expect(again).toBe(false);
+		expect(emitted).toHaveLength(1);
+		expect(emitted[0].content).toContain("pane cerrado a mano");
+		expect(emitted[0].content).toMatch(/cleanup de worktree falló: git colgado/);
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		expect(calls).toHaveLength(0);
+	});
+});
+
 describe("formatEvent", () => {
 	it("settled: primera línea con nombre y estado, cuerpo con output", () => {
 		const s = formatEvent("impl-x", { kind: "settled", state: "idle", output: "línea 1\nlínea 2" });

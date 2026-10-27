@@ -58,10 +58,20 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 		let cleanupNote = "";
 		if (rec.worktree) {
 			const w = rec.worktree;
-			const report = await deps.cleanupWorktree(deps.run, w);
-			cleanupNote = report.removed
-				? `\n(worktree eliminado: ${w.dir})`
-				: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${w.dir}, rama ${w.branch})`;
+			// I2 (issue #13): un fallo de cleanup JAMÁS tumba la entrega — sin catch,
+			// el handler revienta antes del emit: 0 eventos, record live, watcher
+			// muerto. Catch como en rollback/abandonDispatch, con nota en el evento.
+			let report: { removed: boolean; reason?: string } | undefined;
+			try {
+				report = await deps.cleanupWorktree(deps.run, w);
+			} catch (err) {
+				cleanupNote = `\n⚠ cleanup de worktree falló: ${(err as Error).message} — worktree CONSERVADO: ${w.dir}, rama ${w.branch} — revisalo a mano`;
+			}
+			if (report) {
+				cleanupNote = report.removed
+					? `\n(worktree eliminado: ${w.dir})`
+					: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${w.dir}, rama ${w.branch})`;
+			}
 		}
 		let closeNote = "";
 		if (ev.kind === "settled") {
