@@ -202,8 +202,13 @@ export async function dispatch(
 		await agentStart(deps.run, { name, kind: effective.kind, paneId, piArgs });
 		promptResult = await agentPrompt(deps.run, { name, text: task });
 	} catch (err) {
-		// sin agente corriendo no hay nada que vigilar: deshacer topología y worktree
-		await closeTarget(deps.run, { kind: topology, id: targetId }).catch(() => undefined);
+		// sin agente corriendo no hay nada que vigilar: deshacer topología y worktree.
+		// issue #9: si el close de rollback TAMBIÉN falla, el error debe mencionar
+		// ambos fallos — si no, la tab queda abierta en silencio.
+		let closeNote = "";
+		await closeTarget(deps.run, { kind: topology, id: targetId }).catch((closeErr) => {
+			closeNote = `\n⚠ rollback: close de ${topology} ${targetId} falló: ${(closeErr as Error).message} — revisa la tab a mano`;
+		});
 		let note = "";
 		if (worktree) {
 			const report = await cleanupWorktree(deps.run, worktree).catch(() => ({ removed: false, reason: "cleanup falló" }));
@@ -211,7 +216,7 @@ export async function dispatch(
 				? ` (worktree ${worktree.dir} eliminado en rollback)`
 				: ` (worktree ${worktree.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
 		}
-		throw new Error(`${(err as Error).message}${note}`);
+		throw new Error(`${(err as Error).message}${closeNote}${note}`);
 	}
 
 	const rec: DispatchRecord = {
