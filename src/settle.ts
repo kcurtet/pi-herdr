@@ -7,7 +7,7 @@
  */
 import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
-import type { WatchEvent } from "./watch.ts";
+import type { WatchEvent, WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
 
 /** Handler de settle por agente: true = re-armar vigilancia, false = cerrar. */
@@ -37,6 +37,18 @@ export function formatEvent(name: string, ev: WatchEvent): string {
 	}
 }
 
+/** Envuelve un settle handler para el map de watchers de la sesión (index.ts).
+ * M5 (issue #13): en cierre definitivo (handler false — settled sin keepOpen,
+ * gone o record ya cerrado) el handle sale del map; si no, los handles muertos
+ * viven toda la sesión. blocked/keepOpen devuelven true y el handle queda. */
+export function trackedSettle(inner: SettleHandler, watchers: Map<string, WatchHandle>): SettleHandler {
+	return async (name, ev) => {
+		const again = await inner(name, ev);
+		if (!again) watchers.delete(name);
+		return again;
+	};
+}
+
 export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 	return async (name: string, ev: WatchEvent): Promise<boolean> => {
 		const rec = deps.registry.get(name);
@@ -58,10 +70,20 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 		let cleanupNote = "";
 		if (rec.worktree) {
 			const w = rec.worktree;
-			const report = await deps.cleanupWorktree(deps.run, w);
-			cleanupNote = report.removed
-				? `\n(worktree eliminado: ${w.dir})`
-				: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${w.dir}, rama ${w.branch})`;
+			// I2 (issue #13): un fallo de cleanup JAMÁS tumba la entrega — sin catch,
+			// el handler revienta antes del emit: 0 eventos, record live, watcher
+			// muerto. Catch como en rollback/abandonDispatch, con nota en el evento.
+			let report: { removed: boolean; reason?: string } | undefined;
+			try {
+				report = await deps.cleanupWorktree(deps.run, w);
+			} catch (err) {
+				cleanupNote = `\n⚠ cleanup de worktree falló: ${(err as Error).message} — worktree CONSERVADO: ${w.dir}, rama ${w.branch} — revisalo a mano`;
+			}
+			if (report) {
+				cleanupNote = report.removed
+					? `\n(worktree eliminado: ${w.dir})`
+					: `\n(worktree CONSERVADO — ${report.reason ?? "pendiente"}: ${w.dir}, rama ${w.branch})`;
+			}
 		}
 		let closeNote = "";
 		if (ev.kind === "settled") {

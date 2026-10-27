@@ -57,7 +57,7 @@ export interface DispatchDeps {
 	spawnWait: (name: string, phase?: WaitPhase) => ChildProcess;
 	arm: typeof armWatcher;
 	/** Handler de settle para el despacho (T5 inyecta el real). */
-	settleFor: (rec: DispatchRecord) => SettleHandler;
+	settleFor: () => SettleHandler;
 	/** Dirs de resolución de skills/extensiones (spec 002). */
 	resourceDirs: ResourceDirs;
 	/** Defaults persistidos, RECARGADOS en cada dispatch (spec 002 D7/R6). */
@@ -241,7 +241,7 @@ export async function dispatch(
 	deps.arm(
 		{ run: deps.run, spawnWait: deps.spawnWait },
 		name,
-		(ev) => deps.settleFor(rec)(name, ev),
+		(ev) => deps.settleFor()(name, ev),
 	);
 	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, initialBlocked: promptResult === "blocked" || undefined };
 }
