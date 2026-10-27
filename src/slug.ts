@@ -10,7 +10,9 @@ const MAX_LEN = 32;
 /** Palabras funcionales que no aportan identidad a un slug. */
 const STOPWORDS = new Set(["the", "and", "for", "with", "del", "las", "los", "que", "por", "una", "con"]);
 
-/** Slug de la task: 3 primeras palabras ≥3 chars, [a-z0-9-], máx 32, "" si nada útil. */
+/** Slug de la task: 3 primeras palabras ≥3 chars, [a-z0-9-], máx 32, "" si nada útil.
+ *  NAME_RE exige arranque alfabético: si el slug arranca por dígito se prefija "t-"
+ *  recortando para que el prefijo no empuje por encima de 32 chars. */
 export function slugify(task: string): string {
 	const normalized = task
 		.normalize("NFD")
@@ -21,7 +23,9 @@ export function slugify(task: string): string {
 		.filter((w) => w.length >= 3 && !STOPWORDS.has(w))
 		.slice(0, 3);
 	if (words.length === 0) return "";
-	return words.join("-").slice(0, MAX_LEN).replace(/-+$/, "");
+	const slug = words.join("-").slice(0, MAX_LEN).replace(/-+$/, "");
+	if (/^[0-9]/.test(slug)) return `t-${slug}`.slice(0, MAX_LEN).replace(/-+$/, "");
+	return slug;
 }
 
 /** Candidato con sufijo respetando el límite de 32 chars. */
