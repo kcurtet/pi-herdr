@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { Registry, reconcile, type DispatchRecord } from "../src/registry.ts";
+import { Registry, reconcile, stopAgent, type DispatchRecord } from "../src/registry.ts";
 import type { RunFn } from "../src/herdr.ts";
 import type { SettleHandler } from "../src/dispatch.ts";
 import type { EmitFn } from "../src/settle.ts";
 import type { ChildProcess } from "node:child_process";
-import { fakeRun, ok } from "./helpers.ts";
+import { fakeRun, ok, type RecordedCall } from "./helpers.ts";
 
 function rec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	return {
@@ -169,5 +169,65 @@ describe("reconcile", () => {
 		await reconcile(deps);
 		expect(armed).toHaveLength(0);
 		expect(cleanups).toHaveLength(0);
+	});
+});
+
+/**
+ * Deps con log de ORDEN global (issue #10): los tres efectos de abandonDispatch
+ * escriben sobre el MISMO array — cleanup (dep inyectable), close (closeTarget
+ * vía run: [kind, "close", id]) y markClosed (appendEntry del host del registry).
+ */
+function orderedDeps() {
+	const order: string[] = [];
+	const runCalls: RecordedCall[] = [];
+	const run: RunFn = async (file, args, o) => {
+		runCalls.push({ file, args, opts: o });
+		if (args[1] === "close") order.push(`close:${args[0]}`); // closeTarget
+		if (args[0] === "agent" && args[1] === "list") {
+			return ok(JSON.stringify({ result: { agents: [] } })); // nadie vivo → abandon
+		}
+		return ok("");
+	};
+	const host = {
+		appendEntry: (customType: string) => {
+			if (customType === "herdr-dispatch-close") order.push("markClosed");
+		},
+	};
+	const registry = new Registry(host);
+	const deps = {
+		run,
+		registry,
+		cwd: "/repo",
+		spawnWait: (() => ({}) as unknown as ChildProcess),
+		arm: ((_wd: unknown, _name: string) => ({ stop() {} })) as never,
+		settleFor: (): SettleHandler => async () => false,
+		emit: ((_c: string, _d: Record<string, unknown>) => {}) as EmitFn,
+		cleanupWorktree: async (_run: RunFn, o: { repo: string; dir: string; branch: string }) => {
+			order.push("cleanup");
+			return { removed: true } as const;
+		},
+	};
+	return { deps, order, runCalls, registry };
+}
+
+describe("abandonDispatch — flag close y orden de efectos (issue #10)", () => {
+	it("GIVEN reconcile de record muerto con worktree THEN sin closeTarget y orden cleanup→markClosed", async () => {
+		const { deps, order, runCalls, registry } = orderedDeps();
+		registry.add(rec({ worktree: { repo: "/w/repo", dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
+		await reconcile(deps);
+		// close=false en reconcile: el target ya no existe (agente muerto) — un
+		// close espurio (p.ej. perder el flag y llamar con close=true) debe enrojecer.
+		expect(runCalls.filter((c) => c.args[1] === "close")).toEqual([]);
+		expect(order).toEqual(["cleanup", "markClosed"]);
+	});
+
+	it("GIVEN stopAgent THEN closeTarget ENTRE cleanup y markClosed (cleanup→close→markClosed)", async () => {
+		const { deps, order, runCalls, registry } = orderedDeps();
+		registry.add(rec({ worktree: { repo: "/w/repo", dir: "/w/.hd-worktrees/impl-x", branch: "hd/impl-x" } }));
+		await stopAgent(deps, "impl-x");
+		expect(runCalls.map((c) => c.args.join(" "))).toContain("tab close w4:t4K");
+		expect(registry.get("impl-x")!.status).toBe("closed");
+		// markClosed al INICIO del helper (antes del cleanup/close pendientes) debe enrojecer.
+		expect(order).toEqual(["cleanup", "close:tab", "markClosed"]);
 	});
 });
