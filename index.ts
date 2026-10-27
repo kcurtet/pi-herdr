@@ -86,16 +86,19 @@ export default function herdrExtension(pi: ExtensionAPI) {
 
 	const resourceDirs = defaultResourceDirs(process.env);
 
-	// config ilegible/claves inválidas: aviso visible UNA vez al arrancar
-	// (antes los warnings de loadDefaults se descartaban en silencio)
-	const { warnings: configWarnings } = loadDefaults(configPath);
-	if (configWarnings.length > 0) {
+	// config ilegible/claves inválidas: aviso visible UNA vez al arrancar.
+	// FUERA del cuerpo de la factory: los action methods (sendMessage) son
+	// stubs que lanzan hasta bindCore() — llamarlo durante la carga tumba toda
+	// la extensión si el config del usuario tiene warnings (rev issue #4, F1).
+	pi.on("session_start", () => {
+		const { warnings } = loadDefaults(configPath);
+		if (warnings.length === 0) return;
 		pi.sendMessage({
 			customType: "herdr-config-warning",
-			content: `pi-herdr: ⚠ config con problemas (esas claves se ignoran): ${configWarnings.join(" · ")}`,
+			content: `pi-herdr: ⚠ config con problemas (esas claves se ignoran): ${warnings.join(" · ")}`,
 			display: true,
 		});
-	}
+	});
 
 	const armTracked: typeof armWatcher = (wd, name, onEvent) => {
 		const handle = armWatcher(wd, name, onEvent);
