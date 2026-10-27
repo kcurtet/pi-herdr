@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { armWatcher, type WatchEvent } from "../src/watch.ts";
+import { armWatcher, type WatchEvent, type WaitPhase } from "../src/watch.ts";
 import { waitArgs } from "../src/dispatch.ts";
 import type { RunFn } from "../src/herdr.ts";
 
@@ -11,7 +11,7 @@ function waitJson(status: string): string {
 /** spawnWait que emite la secuencia de estados indicada; en fases arm/rearm el turno "arranca" (issue #7). */
 function waitSeq(states: string[], spawnCount: { n: number }) {
 	let i = 0;
-	return (_name: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+	return (_name: string, phase?: WaitPhase): ChildProcess => {
 		spawnCount.n++;
 		let s: string;
 		if (phase === "arm" || phase === "rearm") {
@@ -38,6 +38,20 @@ async function waitFor(cond: () => boolean, what: string): Promise<void> {
 		if (Date.now() > deadline) throw new Error(`timeout esperando: ${what}`);
 		await new Promise((r) => setTimeout(r, 25));
 	}
+}
+
+/** until-set que instant-matchea cada fase, derivado del propio waitArgs (fuente única de verdad).
+ * settle/undefined → default herdr (idle|done|blocked). */
+function untilSetOf(phase: WaitPhase | undefined): Set<string> {
+	if (phase === undefined || phase === "settle") return new Set(["idle", "done", "blocked"]); // default herdr
+	const args = waitArgs("t", phase);
+	const set = new Set<string>();
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "--until") set.add(args[i + 1]!);
+	}
+	// fidelidad con herdr: fase sin --until = default idle|done|blocked (rev #8 F1:
+	// un until-set vacío haría pasar el spam como "bloqueo eterno" del fake)
+	return set.size > 0 ? set : new Set(["idle", "done", "blocked"]);
 }
 
 function collector(flags: boolean[] | ((i: number) => boolean)) {
@@ -70,7 +84,7 @@ describe("armWatcher", () => {
 		await waitFor(() => events.length >= 2, "blocked + settled");
 		expect(events[0]).toEqual({ kind: "blocked" });
 		expect(events[1]).toMatchObject({ kind: "settled", state: "idle" });
-		expect(spawnCount.n).toBe(3); // working + settle(blocked) + settle
+		expect(spawnCount.n).toBe(3); // working + settle(blocked) + rearmBlocked(idle)
 	});
 
 	it("done también es settle válido", async () => {
@@ -118,7 +132,7 @@ describe("armWatcher", () => {
 		const spawnCount = { n: 0 };
 		const settleStates = ["idle", "idle"];
 		let settleIdx = 0;
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
 			spawnCount.n++;
 			const s = phase === "arm" || phase === "rearm" ? "working" : settleStates[Math.min(settleIdx++, settleStates.length - 1)]!;
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
@@ -131,10 +145,10 @@ describe("armWatcher", () => {
 	});
 
 	it("keepOpen tras settle: siguiente spawn es fase rearm (no bucle caliente) — issue #5", async () => {
-		const phases: ("settle" | "arm" | "rearm" | undefined)[] = [];
+		const phases: (WaitPhase | undefined)[] = [];
 		let settleIdx = 0;
 		const settleStates = ["idle", "idle"]; // settle 1 → rearm → settle 2
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
 			phases.push(phase);
 			if (phase === "arm" || phase === "rearm") {
 				// wait --until working/blocked: bloquea hasta que el agente trabaja (o bloquea)
@@ -154,7 +168,7 @@ describe("armWatcher", () => {
 	it("keepOpen con agente que NO vuelve a trabajar: cero eventos extra (anti hot-loop)", async () => {
 		let spawns = 0;
 		let nonSettleWaits = 0;
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
 			spawns++;
 			if (phase !== undefined && phase !== "settle") {
 				nonSettleWaits++;
@@ -176,8 +190,8 @@ describe("armWatcher", () => {
 	});
 
 	it("arm inicial en fase arm: settle solo tras confirmar que el turno arrancó — issue #7", async () => {
-		const phases: ("settle" | "arm" | "rearm" | undefined)[] = [];
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+		const phases: (WaitPhase | undefined)[] = [];
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
 			phases.push(phase);
 			const s = phase === "arm" || phase === "rearm" ? "working" : "idle";
 			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
@@ -190,7 +204,7 @@ describe("armWatcher", () => {
 	});
 
 	it("fase arm con done inmediato → settled(done) sin colgarse — issue #7", async () => {
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess =>
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess =>
 			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "arm" ? "done" : "idle")}'; exit 0`]);
 		const { events, onEvent } = collector([false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
@@ -199,7 +213,7 @@ describe("armWatcher", () => {
 	});
 
 	it("fase arm con blocked → evento blocked (aprobación temprana) — issue #7", async () => {
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess =>
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess =>
 			spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(phase === "arm" ? "blocked" : "idle")}'; exit 0`]);
 		const { events, onEvent } = collector([false]);
 		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
@@ -210,20 +224,11 @@ describe("armWatcher", () => {
 	it("keepOpen con settled(done): el re-arm NO re-matchea done — sin flood (issue #7, finding 1)", async () => {
 		// Fake con semántica level-triggered REAL: los estados que instant-matchea
 		// cada fase se derivan del propio waitArgs (fuente única de verdad).
-		const allowedBy = (phase: "settle" | "arm" | "rearm" | undefined): Set<string> => {
-			if (phase === undefined || phase === "settle") return new Set(["idle", "done", "blocked"]); // default herdr
-			const args = waitArgs("t", phase);
-			const set = new Set<string>();
-			for (let i = 0; i < args.length; i++) {
-				if (args[i] === "--until") set.add(args[i + 1]!);
-			}
-			return set;
-		};
 		const status = "done"; // agente terminado; done persistente en herdr
 		let spawns = 0;
-		const spawnWait = (_n: string, phase?: "settle" | "arm" | "rearm"): ChildProcess => {
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
 			spawns++;
-			return allowedBy(phase).has(status)
+			return untilSetOf(phase).has(status)
 				? spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(status)}'; exit 0`])
 				: spawn("bash", ["-c", "sleep 30"]); // estado actual fuera del until-set: bloquea
 		};
@@ -234,5 +239,55 @@ describe("armWatcher", () => {
 		expect(events).toHaveLength(1); // sin flood de eventos
 		expect(spawns).toBe(2); // arm (done matchea) + rearm bloqueado (done FUERA del set)
 		handle.stop();
+	});
+
+	it("blocked persistente con re-arm: UN solo evento blocked, sin spam — issue #8", async () => {
+		// Fake level-triggered (hasta-sets derivados de waitArgs): el agente sigue
+		// blocked mientras el humano decide. Hoy el re-arm tras blocked va a settle
+		// (default idle|done|blocked) → instant-matchea blocked → spam infinito.
+		const status = "blocked";
+		let spawns = 0;
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
+			spawns++;
+			return untilSetOf(phase).has(status)
+				? spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(status)}'; exit 0`])
+				: spawn("bash", ["-c", "sleep 30"]); // estado actual fuera del until-set: bloquea
+		};
+		const { events, onEvent } = collector([true]); // re-arm tras blocked
+		const handle = armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length > 0, "blocked inicial");
+		await new Promise((r) => setTimeout(r, 250));
+		expect(events).toEqual([{ kind: "blocked" }]); // exactamente 1, sin spam
+		expect(spawns).toBe(2); // arm (blocked ∈ set de arm) + espera de cambio bloqueada
+		handle.stop();
+	});
+
+	it("blocked → humano aprueba (working) → watcher sigue al settle normal → settled — issue #8", async () => {
+		const phases: (WaitPhase | undefined)[] = [];
+		let status = "blocked"; // bloqueado desde antes del arm (aprobación temprana)
+		let spawns = 0;
+		const spawnWait = (_n: string, phase?: WaitPhase): ChildProcess => {
+			phases.push(phase);
+			spawns++;
+			if (!untilSetOf(phase).has(status)) return spawn("bash", ["-c", "sleep 30"]); // bloquea
+			const s = status;
+			if (spawns === 2 && s === "working") status = "idle"; // aprobado: el agente corre y termina
+			return spawn("bash", ["-c", `sleep 0.05; echo '${waitJson(s)}'; exit 0`]);
+		};
+		const events: WatchEvent[] = [];
+		const onEvent = async (ev: WatchEvent): Promise<boolean> => {
+			events.push(ev);
+			if (ev.kind === "blocked") {
+				status = "working"; // el humano aprueba en el pane
+				return true; // re-arm
+			}
+			return false;
+		};
+		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		await waitFor(() => events.length >= 2, "blocked + settled");
+		expect(events[0]).toEqual({ kind: "blocked" });
+		expect(events[1]).toMatchObject({ kind: "settled", state: "idle", output: "salida final del agente" });
+		expect(phases).toEqual(["arm", "rearmBlocked", "settle"]);
+		expect(spawns).toBe(3);
 	});
 });

@@ -14,16 +14,24 @@
  * - rearm (keepOpen tras settle): working|blocked. NUNCA done/idle — el estado
  *   actual es precisamente el acabado de reportar y el wait lo instant-matchea
  *   (flood de eventos con triggerTurn, finding 1 de la revisión #7).
+ * - rearmBlocked (re-arm tras evento blocked): working|idle|done. El estado
+ *   actual es el blocked recién reportado y el settle por defecto
+ *   (idle|done|blocked) lo instant-matchea → spam infinito de eventos blocked
+ *   con triggerTurn mientras el humano decide (issue #8). NUNCA blocked:
+ *   esperar un CAMBIO — el agente reanuda (working) o termina (idle|done). Un
+ *   blocked NUEVO (reanuda y vuelve a bloquearse) llega vía el settle posterior,
+ *   ya con un cambio de por medio.
  * - settle: sin --until (herdr matchea idle|done|blocked por defecto).
  *
  * Hang aceptado (trade-off): un agente cuyo turno nunca arranca (pane vivo con
- * idle persistente, p.ej. pi muerto) deja el watcher bloqueado en fase arm/rearm
+ * idle persistente, p.ej. pi muerto), o que queda blocked eternamente sin
+ * decisión humana, deja el watcher bloqueado en fase arm/rearm/rearmBlocked
  * y el record `live` en herdr_agents. Escape manual: herdr_stop.
  */
 import { type ChildProcess } from "node:child_process";
 import { agentRead, type RunFn } from "./herdr.ts";
 
-export type WaitPhase = "settle" | "arm" | "rearm";
+export type WaitPhase = "settle" | "arm" | "rearm" | "rearmBlocked";
 
 export type WatchEvent =
 	| { kind: "blocked" }
@@ -72,7 +80,10 @@ export function armWatcher(
 			// el estado terminal recién reportado y buclea en caliente (issues #5 y #7-F1)
 			cycle("rearm");
 		} else {
-			cycle();
+			// blocked: esperar un CAMBIO (working|idle|done) — el settle por defecto
+			// incluye blocked y lo instant-matchea → spam con triggerTurn mientras
+			// el humano decide (issue #8)
+			cycle("rearmBlocked");
 		}
 	};
 
