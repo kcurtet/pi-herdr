@@ -279,6 +279,59 @@ describe("dispatch — worktree", () => {
 		expect(registry.get(r.agent)!.worktree).toEqual({ repo: "/w/repo", dir: r.worktreePath!, branch: `hd/${r.agent}` });
 	});
 
+	it("config worktree:true sin param → crea worktree (jerarquía config > builtin, issue #12)", async () => {
+		const { run, calls } = fakeRun(routes);
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+				if (args.includes("rev-parse")) return ok("/w/repo");
+				return ok("");
+			}
+			return run(file, args, opts);
+		};
+		const registry = new Registry();
+		const { deps } = makeDeps({ run: runBoth, registry, config: { worktree: true } });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(r.worktreePath).toBe("/w/.hd-worktrees/" + r.agent);
+		expect(gitCalls.find((c) => c.args[2] === "worktree")!.args).toContain("add");
+		const tabCall = calls.find((c) => c.args[1] === "create")!;
+		expect(tabCall.args[tabCall.args.indexOf("--cwd") + 1]).toBe(r.worktreePath);
+		expect(registry.get(r.agent)!.worktree).toBeDefined();
+	});
+
+	it("config worktree:true + param worktree:false explícito → SIN worktree (param gana)", async () => {
+		const { run } = fakeRun(routes);
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+				return ok("/w/repo");
+			}
+			return run(file, args, opts);
+		};
+		const { deps } = makeDeps({ run: runBoth, config: { worktree: true } });
+		const r = await dispatch(deps, { task: "revisa el login", worktree: false }, { HERDR_ENV: "1" });
+		expect(gitCalls).toHaveLength(0);
+		expect(r.worktreePath).toBeUndefined();
+	});
+
+	it("sin config ni param → sin worktree (builtin false, 0 llamadas git)", async () => {
+		const { run } = fakeRun(routes);
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+				return ok("/w/repo");
+			}
+			return run(file, args, opts);
+		};
+		const { deps } = makeDeps({ run: runBoth });
+		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		expect(gitCalls).toHaveLength(0);
+		expect(r.worktreePath).toBeUndefined();
+	});
+
 	it("worktree y fallo en agent start: cleanup del huérfano + error lo menciona", async () => {
 		const { run, calls } = fakeRun({
 			...routes,
