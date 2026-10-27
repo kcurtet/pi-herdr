@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +44,13 @@ function setup(saved: DispatchDefaults = {}, options?: { skillNames?: string[]; 
 const read = (p: string): DispatchDefaults =>
 	(JSON.parse(readFileSync(p, "utf8")) as { defaults: DispatchDefaults }).defaults;
 
+/** Fichero crudo con claves que loadDefaults filtra al cargar (inválidas/futuras). */
+function injectRaw(p: string, defaults: Record<string, unknown>): void {
+	writeFileSync(p, JSON.stringify({ defaults }, null, "\t") + "\n");
+}
+const readRaw = (p: string): Record<string, unknown> =>
+	(JSON.parse(readFileSync(p, "utf8")) as { defaults: Record<string, unknown> }).defaults;
+
 describe("/herdr bare", () => {
 	it("muestra los 6 defaults con origen y la ayuda", async () => {
 		const { cmd, ctx, notifies } = setup({ skills: true });
@@ -82,6 +89,26 @@ describe("/herdr config <key> <valor>", () => {
 		const { cmd, ctx, notifies } = setup();
 		await cmd.handler("config nope true", ctx);
 		expect(notifies.some((n) => n.level === "error" && /nope/i.test(n.msg))).toBe(true);
+	});
+});
+
+describe("/herdr config — preservación de claves crudas (M2)", () => {
+	it("guardar un default NO elimina otras claves del fichero (p.ej. inválidas)", async () => {
+		const { cmd, ctx, configPath } = setup();
+		injectRaw(configPath, { topology: "Matrix", kind: "claude" });
+		await cmd.handler("config keepOpen true", ctx);
+		const raw = readRaw(configPath);
+		expect(raw.topology).toBe("Matrix"); // la inválida SIGUE
+		expect(raw.kind).toBe("claude");
+		expect(raw.keepOpen).toBe(true);
+	});
+	it("reset de un key NO elimina otras claves del fichero", async () => {
+		const { cmd, ctx, configPath } = setup();
+		injectRaw(configPath, { topology: "Matrix", kind: "claude" });
+		await cmd.handler("reset kind", ctx);
+		const raw = readRaw(configPath);
+		expect(raw.topology).toBe("Matrix");
+		expect("kind" in raw).toBe(false);
 	});
 });
 

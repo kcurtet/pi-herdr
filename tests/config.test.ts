@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadDefaults, mergeInput, saveDefaults, type DispatchDefaults } from "../src/config.ts";
+import { loadDefaults, loadRawDefaults, mergeInput, saveDefaults, type DispatchDefaults } from "../src/config.ts";
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -41,6 +41,23 @@ describe("loadDefaults", () => {
 		expect(r.warnings.join(" ")).toMatch(/topology/);
 		expect(r.warnings.join(" ")).toMatch(/kind/);
 		expect(r.warnings.join(" ")).toMatch(/worktree/);
+	});
+});
+
+describe("loadRawDefaults — defaults crudos sin filtrar (M2)", () => {
+	it("devuelve el fichero tal cual: inválidas y desconocidas incluidas", () => {
+		const p = tmpPath();
+		writeFileSync(p, JSON.stringify({ defaults: { topology: "Matrix", kind: "claude", future: 42, skills: true } }));
+		expect(loadRawDefaults(p)).toEqual({ topology: "Matrix", kind: "claude", future: 42, skills: true });
+	});
+	it("fichero inexistente, ilegible o sin defaults → {}", () => {
+		expect(loadRawDefaults(join(tmpPath(), "..", "no-existe.json"))).toEqual({});
+		const p = tmpPath();
+		writeFileSync(p, "{broken");
+		expect(loadRawDefaults(p)).toEqual({});
+		const p2 = tmpPath();
+		writeFileSync(p2, JSON.stringify({ otra: "cosa" }));
+		expect(loadRawDefaults(p2)).toEqual({});
 	});
 });
 
