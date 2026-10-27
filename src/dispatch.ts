@@ -176,8 +176,10 @@ export async function dispatch(
 	const topology = effective.topology;
 
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
+	// issue #12: se resuelve por jerarquía param > config > builtin (effective),
+	// igual que el resto de keys — no por el input crudo
 	let worktree: WorktreeRef | undefined;
-	if (input.worktree === true) {
+	if (effective.worktree === true) {
 		worktree = await createWorktree(deps.run, { repo: cwd, name });
 	}
 	const agentCwd = worktree?.dir ?? cwd;
