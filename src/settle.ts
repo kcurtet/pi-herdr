@@ -3,7 +3,10 @@
  *
  * settled sin keepOpen → evento final + cleanup worktree (si hay) + close +
  * markClosed. blocked → aviso, nunca close. gone → markClosed + cleanup, sin
- * close (el pane ya no existe). Todo idempotente por el estado del registry.
+ * close (el pane ya no existe). stranded (issue #14: el wait falló pero el
+ * agente SIGUE vivo o no se pudo verificar) → SOLO evento visible: record en
+ * live (herdr_stop sigue disponible), sin close ni cleanup — nada de lo que
+ * el agente esté usando se destruye. Todo idempotente por el estado del registry.
  */
 import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
@@ -34,6 +37,8 @@ export function formatEvent(name: string, ev: WatchEvent): string {
 			return `[${name}] settled (${ev.state})\n\n${ev.output.trim() === "" ? "(sin captura de salida — léelo con herdr_read si sigue vivo)" : ev.output}`;
 		case "gone":
 			return `[${name}] gone — ${ev.reason}`;
+		case "stranded":
+			return `[${name}] stranded — ${ev.reason}`;
 	}
 }
 
@@ -64,6 +69,15 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 			const content = `${formatEvent(name, ev)}\n\n(keepOpen: el pane queda abierto — usa herdr_prompt para otra ronda o herdr_stop para cerrar)`;
 			deps.emit(content, { customType: "herdr-dispatch-event", agent: name, kind: ev.kind, keepOpen: true });
 			return true;
+		}
+
+		if (ev.kind === "stranded") {
+			// issue #14: el wait murió pero el agente (probablemente) SIGUE vivo —
+			// fallo del server herdr, no del despacho. NADA se cierra ni se limpia:
+			// el record queda live (herdr_stop disponible) y el watcher ya está
+			// detenido (stranded nunca re-arma) → devolver false suelta el handle.
+			deps.emit(formatEvent(name, ev), { customType: "herdr-dispatch-event", agent: name, kind: ev.kind });
+			return false;
 		}
 
 		// cierre definitivo: settled sin keepOpen, o gone

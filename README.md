@@ -16,7 +16,7 @@ Requiere correr dentro de herdr (`HERDR_ENV=1`).
 
 ## Comportamiento
 
-- **Eventos, no polling**: un watcher interno (`herdr agent wait` driven) emite `blocked`/`settled`/`gone` como mensajes que disparan turno cuando el agente principal está idle. El settle trae la salida del agente.
+- **Eventos, no polling**: un watcher interno (`herdr agent wait` driven) emite `blocked`/`settled`/`gone`/`stranded` como mensajes que disparan turno cuando el agente principal está idle. El settle trae la salida del agente. `stranded` = el wait murió pero el agente SIGUE vivo (p.ej. server herdr caído/reiniciándose): nada se cierra, el despacho queda live — decide con `herdr_stop`.
 - **Auto-cierre**: al settle el tab se cierra solo (spec "un despacho = un pane = una vida"). `blocked` NUNCA cierra — la aprobación se decide en el pane visible. `keepOpen: true` desactiva el auto-cierre.
 - **Worktree opcional** (`worktree: true`): rama `hd/<name>` desde HEAD en `<repo>/../.hd-worktrees/<name>`. Cleanup conservador: solo se borra con working tree limpio y rama fully-merged; si hay WIP o commits sin merge, se conserva y se reporta (gate humano).
 - **Resume/crash**: el registry se persiste en entries de sesión y `session_start` reconcilia contra `herdr agent list` — los agentes vivos recuperan watcher; los muertos se cierran (worktree pendiente se limpia una sola vez).

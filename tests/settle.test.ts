@@ -86,6 +86,8 @@ describe("makeSettleHandler — blocked", () => {
 });
 
 describe("makeSettleHandler — gone", () => {
+	// pinning issue #14 (criterio 2): gone verificado (agente ausente) mantiene
+	// el comportamiento exacto de siempre — markClosed + cleanup, SIN close.
 	it("markClosed, devuelve false, SIN close del pane", async () => {
 		const { handler, registry, calls, emitted } = setup();
 		const again = await handler("impl-x", { kind: "gone", reason: "pane cerrado a mano" });
@@ -218,6 +220,37 @@ describe("makeSettleHandler — cleanup de worktree fallido (I2, issue #13)", ()
 	});
 });
 
+describe("makeSettleHandler — stranded (issue #14: wait falló con el agente vivo)", () => {
+	it("record queda LIVE, evento visible con guía, SIN close NI cleanup, devuelve false", async () => {
+		// con worktree a propósito: nada se limpia — el agente puede seguir usándolo
+		const { handler, registry, calls, emitted, cleanups } = setup({
+			worktree: { repo: "/x/repo", dir: "/x/.hd-worktrees/impl-x", branch: "hd/impl-x" },
+		});
+		const again = await handler("impl-x", {
+			kind: "stranded",
+			reason: "wait exited 3: herdr: server unreachable pero el agente SIGUE vivo — no se cierra; usa herdr_stop si quieres abortarlo",
+		});
+		expect(again).toBe(false);
+		expect(registry.get("impl-x")!.status).toBe("live"); // herdr_stop sigue disponible
+		expect(calls).toHaveLength(0); // sin close: la tab sigue abierta
+		expect(cleanups).toHaveLength(0); // sin cleanup: el worktree sigue en juego
+		expect(emitted).toHaveLength(1);
+		expect(emitted[0].content).toContain("[impl-x] stranded");
+		expect(emitted[0].content).toMatch(/SIGUE vivo/);
+		expect(emitted[0].content).toMatch(/herdr_stop/);
+		expect(emitted[0].details.kind).toBe("stranded");
+	});
+
+	it("idempotente e inofensivo si llega repetido sobre record live", async () => {
+		const { handler, registry, emitted } = setup();
+		await handler("impl-x", { kind: "stranded", reason: "wait exited 3" });
+		const again = await handler("impl-x", { kind: "stranded", reason: "wait exited 3" });
+		expect(again).toBe(false);
+		expect(registry.get("impl-x")!.status).toBe("live");
+		expect(emitted).toHaveLength(2); // re-emite el aviso (no cierra nada), p.ej. tras reconcile
+	});
+});
+
 describe("trackedSettle — el map de watchers suelta el handle en cierre definitivo (M5, issue #13)", () => {
 	it("handler false (settled sin keepOpen / gone / ya closed) → elimina el handle del map", async () => {
 		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
@@ -254,5 +287,8 @@ describe("formatEvent", () => {
 	it("blocked y gone legibles", () => {
 		expect(formatEvent("a", { kind: "blocked" })).toMatch(/blocked/);
 		expect(formatEvent("a", { kind: "gone", reason: "crash" })).toMatch(/gone/);
+	});
+	it("stranded legible: [name] stranded — reason (issue #14)", () => {
+		expect(formatEvent("a", { kind: "stranded", reason: "wait exited 3" })).toBe("[a] stranded — wait exited 3");
 	});
 });
