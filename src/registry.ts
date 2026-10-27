@@ -110,7 +110,7 @@ export interface ReconcileDeps {
 	cwd: string;
 	spawnWait: (name: string, phase?: WaitPhase) => ChildProcess;
 	arm: typeof armWatcher;
-	settleFor: (rec: DispatchRecord) => SettleHandler;
+	settleFor: () => SettleHandler;
 	emit: EmitFn;
 	cleanupWorktree: CleanupWorktreeFn;
 }
@@ -130,7 +130,7 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 			deps.arm(
 				{ run: deps.run, spawnWait: deps.spawnWait },
 				rec.agent,
-				(ev) => deps.settleFor(rec)(rec.agent, ev),
+				(ev) => deps.settleFor()(rec.agent, ev),
 			);
 			reArmed.push(rec.agent);
 			continue;
