@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { armWatcher, type WatchEvent, type WaitPhase } from "../src/watch.ts";
+import { armWatcher, verifyAgentAlive, type WatchEvent, type WaitPhase } from "../src/watch.ts";
 import { waitArgs } from "../src/dispatch.ts";
 import type { RunFn } from "../src/herdr.ts";
+import { fakeRun, fx, ok } from "./helpers.ts";
 
 function waitJson(status: string): string {
 	return JSON.stringify({ id: "cli:agent:wait", result: { agent: { name: "t", agent_status: status, pane_id: "w1:p1" } } });
@@ -94,14 +95,14 @@ describe("armWatcher", () => {
 		expect(events[0]).toMatchObject({ kind: "settled", state: "done" });
 	});
 
-	it("wait exit != 0 → gone con reason; nunca re-arma aunque onEvent=true", async () => {
+	it("wait exit != 0 con agente AUSENTE (verifyAgent=false) → gone genuino: reason, sin re-arm aunque onEvent=true — pinning issue #14", async () => {
 		const spawnCount = { n: 0 };
 		const { events, onEvent } = collector([true]);
 		const spawnWait = (_n: string): ChildProcess => {
 			spawnCount.n++;
 			return spawn("bash", ["-c", "sleep 0.05; echo 'pane gone' >&2; exit 3"]);
 		};
-		armWatcher({ run: readRun, spawnWait }, "t", onEvent);
+		armWatcher({ run: readRun, spawnWait, verifyAgent: async () => false }, "t", onEvent);
 		await waitFor(() => events.length > 0, "gone");
 		await new Promise((r) => setTimeout(r, 150));
 		expect(events[0].kind).toBe("gone");
@@ -289,5 +290,80 @@ describe("armWatcher", () => {
 		expect(events[1]).toMatchObject({ kind: "settled", state: "idle", output: "salida final del agente" });
 		expect(phases).toEqual(["arm", "rearmBlocked", "settle"]);
 		expect(spawns).toBe(3);
+	});
+});
+
+describe("armWatcher — fallo del wait: verificación de vida antes de declarar gone (issue #14)", () => {
+	it("wait exit ≠ 0 con agente VIVO (verifyAgent=true): stranded con guía herdr_stop, verificado UNA vez, sin re-arm", async () => {
+		const spawnCount = { n: 0 };
+		const verifications: string[] = [];
+		const spawnWait = (_n: string): ChildProcess => {
+			spawnCount.n++;
+			return spawn("bash", ["-c", "sleep 0.05; echo 'herdr: server unreachable' >&2; exit 3"]);
+		};
+		const { events, onEvent } = collector([true]); // true: stranded tampoco re-armaría aunque onEvent lo pidiera
+		armWatcher(
+			{ run: readRun, spawnWait, verifyAgent: async (n) => { verifications.push(n); return true; } },
+			"t",
+			onEvent,
+		);
+		await waitFor(() => events.length > 0, "stranded");
+		await new Promise((r) => setTimeout(r, 150));
+		expect(events).toHaveLength(1);
+		expect(events[0].kind).toBe("stranded");
+		const reason = (events[0] as { reason: string }).reason;
+		expect(reason).toMatch(/SIGUE vivo/);
+		expect(reason).toMatch(/herdr_stop/);
+		expect(reason).toMatch(/server unreachable/);
+		expect(verifications).toEqual(["t"]); // una sola verificación, con el nombre del agente
+		expect(spawnCount.n).toBe(1); // watcher detenido: sin re-arm
+	});
+
+	it("spawn error del wait con agente VIVO: UN stranded (el close posterior no duplica) — issue #14", async () => {
+		const spawnCount = { n: 0 };
+		const spawnWait = (_n: string): ChildProcess => {
+			spawnCount.n++;
+			// binario inexistente: 'error' (ENOENT) y luego 'close' con code null
+			return spawn("pi-herdr-binario-que-no-existe", []);
+		};
+		const { events, onEvent } = collector([true]);
+		armWatcher({ run: readRun, spawnWait, verifyAgent: async () => true }, "t", onEvent);
+		await waitFor(() => events.length > 0, "stranded tras spawn error");
+		await new Promise((r) => setTimeout(r, 150));
+		expect(events).toHaveLength(1); // el close (null) tras el error NO genera un segundo evento
+		const ev = events[0] as { kind: string; reason: string };
+		expect(ev.kind).toBe("stranded");
+		expect(ev.reason).toMatch(/spawn error/);
+		expect(ev.reason).toMatch(/SIGUE vivo/);
+		expect(ev.reason).toMatch(/herdr_stop/);
+		expect(spawnCount.n).toBe(1);
+	});
+
+	it("verificación imposible (agentList TAMBIÉN caído): stranded conservador, NO gone — issue #14", async () => {
+		const spawnWait = (_n: string): ChildProcess => spawn("bash", ["-c", "sleep 0.05; exit 3"]);
+		const { events, onEvent } = collector([false]);
+		armWatcher(
+			{ run: readRun, spawnWait, verifyAgent: async () => { throw new Error("herdr agent list falló (exit 1): server unreachable"); } },
+			"t",
+			onEvent,
+		);
+		await waitFor(() => events.length > 0, "stranded sin verificación");
+		expect(events[0].kind).toBe("stranded");
+		const reason = (events[0] as { reason: string }).reason;
+		expect(reason).toMatch(/no se pudo verificar|server unreachable/);
+		expect(reason).toMatch(/herdr_stop/);
+	});
+});
+
+describe("verifyAgentAlive — default real vía agentList (issue #14)", () => {
+	it("busca por nombre en la lista: presente → true, ausente → false", async () => {
+		const { run } = fakeRun({ "agent list": ok(fx("agent-list")) });
+		await expect(verifyAgentAlive(run, "dash-patch")).resolves.toBe(true);
+		await expect(verifyAgentAlive(run, "no-esta")).resolves.toBe(false);
+	});
+
+	it("herdr caído → rechaza (el watcher lo trata como no verificable)", async () => {
+		const { run } = fakeRun({ "agent list": { code: 1, stdout: "", stderr: "server unreachable" } });
+		await expect(verifyAgentAlive(run, "x")).rejects.toThrow(/server unreachable/);
 	});
 });
