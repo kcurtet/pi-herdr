@@ -7,7 +7,7 @@
  */
 import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
-import type { WatchEvent } from "./watch.ts";
+import type { WatchEvent, WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
 
 /** Handler de settle por agente: true = re-armar vigilancia, false = cerrar. */
@@ -35,6 +35,18 @@ export function formatEvent(name: string, ev: WatchEvent): string {
 		case "gone":
 			return `[${name}] gone — ${ev.reason}`;
 	}
+}
+
+/** Envuelve un settle handler para el map de watchers de la sesión (index.ts).
+ * M5 (issue #13): en cierre definitivo (handler false — settled sin keepOpen,
+ * gone o record ya cerrado) el handle sale del map; si no, los handles muertos
+ * viven toda la sesión. blocked/keepOpen devuelven true y el handle queda. */
+export function trackedSettle(inner: SettleHandler, watchers: Map<string, WatchHandle>): SettleHandler {
+	return async (name, ev) => {
+		const again = await inner(name, ev);
+		if (!again) watchers.delete(name);
+		return again;
+	};
 }
 
 export function makeSettleHandler(deps: SettleDeps): SettleHandler {

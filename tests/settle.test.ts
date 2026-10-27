@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatEvent, makeSettleHandler } from "../src/settle.ts";
+import { formatEvent, makeSettleHandler, trackedSettle } from "../src/settle.ts";
 import { Registry, type DispatchRecord } from "../src/registry.ts";
-import type { WatchEvent } from "../src/watch.ts";
+import type { WatchEvent, WatchHandle } from "../src/watch.ts";
 import type { RunFn } from "../src/herdr.ts";
 import { fakeRun, ok } from "./helpers.ts";
 
@@ -215,6 +215,27 @@ describe("makeSettleHandler — cleanup de worktree fallido (I2, issue #13)", ()
 		expect(emitted[0].content).toMatch(/cleanup de worktree falló: git colgado/);
 		expect(registry.get("impl-x")!.status).toBe("closed");
 		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("trackedSettle — el map de watchers suelta el handle en cierre definitivo (M5, issue #13)", () => {
+	it("handler false (settled sin keepOpen / gone / ya closed) → elimina el handle del map", async () => {
+		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
+		const wrapped = trackedSettle(async () => false, watchers);
+		expect(await wrapped("impl-x", { kind: "settled", state: "idle", output: "" })).toBe(false);
+		expect(watchers.has("impl-x")).toBe(false);
+	});
+
+	it("handler true (blocked / settled con keepOpen) → el handle queda en el map", async () => {
+		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
+		const wrapped = trackedSettle(async () => true, watchers);
+		expect(await wrapped("impl-x", { kind: "blocked" })).toBe(true);
+		expect(watchers.has("impl-x")).toBe(true);
+	});
+
+	it("agente sin handle en el map: delete no-op, no lanza", async () => {
+		const wrapped = trackedSettle(async () => false, new Map<string, WatchHandle>());
+		await expect(wrapped("fantasma", { kind: "gone", reason: "x" })).resolves.toBe(false);
 	});
 });
 

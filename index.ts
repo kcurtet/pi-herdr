@@ -17,7 +17,7 @@ import {
 	type DispatchDeps,
 	type DispatchResult,
 } from "./src/dispatch.ts";
-import { makeSettleHandler, type EmitFn } from "./src/settle.ts";
+import { makeSettleHandler, trackedSettle, type EmitFn } from "./src/settle.ts";
 import { cleanupWorktree } from "./src/worktree.ts";
 import { armWatcher } from "./src/watch.ts";
 import {
@@ -25,7 +25,6 @@ import {
 	reconcile,
 	shutdownCleanup,
 	stopDispatch,
-	type DispatchRecord,
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
@@ -118,8 +117,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		cwd: process.cwd(),
 		spawnWait: herdrWaitSpawn,
 		arm: armTracked,
-		settleFor: (rec: DispatchRecord) =>
-			makeSettleHandler({ run, registry, emit, cleanupWorktree }),
+		settleFor: () => trackedSettle(makeSettleHandler({ run, registry, emit, cleanupWorktree }), watchers),
 		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 		...inject,

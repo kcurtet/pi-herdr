@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { dispatch, dispatchReport, listDispatches, promptAgent, readAgent, waitArgs, type DispatchDeps, type DispatchResult } from "../src/dispatch.ts";
 import { defaultResourceDirs } from "../src/resources.ts";
 import { saveDefaults, loadDefaults } from "../src/config.ts";
-import { Registry, type DispatchRecord } from "../src/registry.ts";
+import { Registry } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
 import { fakeRun, fx, ok } from "./helpers.ts";
@@ -25,7 +25,7 @@ function makeDeps(overrides?: Partial<DispatchDeps> & {
 	const armedWith: string[] = [];
 	const decisions = overrides?.settleDecisions ?? [false];
 	let i = 0;
-	const settleFor = (rec: DispatchRecord): SettleHandler => {
+	const settleFor = (): SettleHandler => {
 		return async (name, ev) => {
 			settleEvents.push({ name, ev });
 			return decisions[Math.min(i++, decisions.length - 1)] ?? false;
