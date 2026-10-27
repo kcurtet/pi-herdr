@@ -59,6 +59,15 @@ describe("tabCreate", () => {
 			opts: { timeoutMs: 15_000 },
 		});
 	});
+
+	it("workspace explícito: --workspace <id> ANTES de --cwd (issue #11: tab en el ws de la sesión, no el enfocado)", async () => {
+		const { run, calls } = fakeRun({ "tab create": ok(fx("tab-create")) });
+		const r = await tabCreate(run, { cwd: "/repo", label: "impl-x", workspace: "w13" });
+		expect(r).toEqual({ paneId: "w4:p4M", tabId: "w4:t4K", workspaceId: "w4" });
+		expect(calls[0].args).toEqual([
+			"tab", "create", "--workspace", "w13", "--cwd", "/repo", "--label", "impl-x", "--no-focus",
+		]);
+	});
 });
 
 describe("paneSplitRight", () => {
@@ -67,6 +76,13 @@ describe("paneSplitRight", () => {
 		const r = await paneSplitRight(run, { cwd: "/repo" });
 		expect(r).toEqual({ paneId: "w4:p5A" });
 		expect(calls[0].args).toEqual(["pane", "split", "--current", "--direction", "right", "--cwd", "/repo"]);
+	});
+
+	it("pane explícito: PANE_ID posicional en vez de --current (issue #11: split del pane de la sesión, no el enfocado)", async () => {
+		const { run, calls } = fakeRun({ "pane split": ok(fx("pane-split")) });
+		const r = await paneSplitRight(run, { cwd: "/repo", pane: "w13:pW" });
+		expect(r).toEqual({ paneId: "w4:p5A" });
+		expect(calls[0].args).toEqual(["pane", "split", "w13:pW", "--direction", "right", "--cwd", "/repo"]);
 	});
 });
 
