@@ -24,7 +24,8 @@
  * - settle: sin --until (herdr matchea idle|done|blocked por defecto).
  *
  * Hang aceptado (trade-off): un agente cuyo turno nunca arranca (pane vivo con
- * idle persistente, p.ej. pi muerto) deja el watcher bloqueado en fase arm/rearm
+ * idle persistente, p.ej. pi muerto), o que queda blocked eternamente sin
+ * decisión humana, deja el watcher bloqueado en fase arm/rearm/rearmBlocked
  * y el record `live` en herdr_agents. Escape manual: herdr_stop.
  */
 import { type ChildProcess } from "node:child_process";

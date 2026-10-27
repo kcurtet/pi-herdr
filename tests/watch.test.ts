@@ -49,7 +49,9 @@ function untilSetOf(phase: WaitPhase | undefined): Set<string> {
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--until") set.add(args[i + 1]!);
 	}
-	return set;
+	// fidelidad con herdr: fase sin --until = default idle|done|blocked (rev #8 F1:
+	// un until-set vacío haría pasar el spam como "bloqueo eterno" del fake)
+	return set.size > 0 ? set : new Set(["idle", "done", "blocked"]);
 }
 
 function collector(flags: boolean[] | ((i: number) => boolean)) {
