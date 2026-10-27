@@ -71,7 +71,7 @@ const StopParams = Type.Object(
 	{ $id: "HerdrStopParams" },
 );
 
-export default function herdrExtension(pi: ExtensionAPI) {
+export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<DispatchDeps>) {
 	const registry = new Registry(pi);
 	const watchers = new Map<string, WatchHandle>();
 	const configPath = join(
@@ -106,16 +106,23 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		return handle;
 	};
 
+	// seam de tests (issue #9): overrides de deps inyectables — pi llama al default
+	// export con un solo arg, así que en producción todo es real. `run` inyectado
+	// fluye por todo el factory (dispatch, settle, stop, shutdown) para que la
+	// inyección sea coherente; `registry` inyectado fluiría también a reconcile
+	// (session_start) — hoy ningún test lo inyecta (rev #9, nit).
+	const run = inject?.run ?? localRun;
 	const deps: DispatchDeps = {
-		run: localRun,
+		run,
 		registry,
 		cwd: process.cwd(),
 		spawnWait: herdrWaitSpawn,
 		arm: armTracked,
 		settleFor: (rec: DispatchRecord) =>
-			makeSettleHandler({ run: localRun, registry, emit, cleanupWorktree }),
+			makeSettleHandler({ run, registry, emit, cleanupWorktree }),
 		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
+		...inject,
 	};
 
 	pi.registerTool({
@@ -175,7 +182,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 		parameters: StopParams,
 		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 		execute: async (_id, params) => {
-			const text = await stopDispatch({ run: localRun, registry, cleanupWorktree, watchers }, params.agent);
+			const text = await stopDispatch({ run, registry, cleanupWorktree, watchers }, params.agent);
 			return { content: [{ type: "text", text }], details: { agent: params.agent } };
 		},
 	});
@@ -213,7 +220,7 @@ export default function herdrExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		await shutdownCleanup({ run: localRun, registry, cleanupWorktree });
+		await shutdownCleanup({ run, registry, cleanupWorktree });
 	});
 
 	// /herdr — defaults configurables (spec 002 D6)
