@@ -82,14 +82,22 @@ function packageEntry(pkgDir: string): string {
 	}
 }
 
-/** git:<url> → {host, owner, repo}; host default github.com. Formas: o/r, github.com/o/r, https://host/o/r(.git). */
+// Formas aceptadas (host explícito primero; si no, github.com):
+// git:https://host/o/r[.git] · git:host/o/r[.git] · git:o/r[.git]
+const GIT_HOST_SOURCE = /^git:(?:https?:\/\/)?(?<host>[^/]+)\/(?<owner>[^/]+)\/(?<repo>[^/#?]+?)(?:\.git)?$/;
+const GIT_SOURCE = /^git:(?<owner>[^/]+)\/(?<repo>[^/#?]+?)(?:\.git)?$/;
+
+/** git:<url> → {host, owner, repo}; host default github.com. */
 function parseGitSource(src: string): { host: string; owner: string; repo: string } | undefined {
-	const m =
-		/^git:(?:https?:\/\/)?([^/]+)\/([^/]+)\/([^/#?]+?)(?:\.git)?$/.exec(src) ??
-		/^git:([^/]+)\/([^/#?]+?)(?:\.git)?$/.exec(src);
-	if (!m) return undefined;
-	if (m.length === 4) return { host: m[1]!, owner: m[2]!, repo: m[3]! };
-	return { host: "github.com", owner: m[1]!, repo: m[2]! };
+	const groups = (GIT_HOST_SOURCE.exec(src) ?? GIT_SOURCE.exec(src))?.groups;
+	if (!groups) return undefined;
+	return { host: groups.host ?? "github.com", owner: groups.owner!, repo: groups.repo! };
+}
+
+/** Entry de un paquete git YA instalado bajo gitRoot (host/owner/repo), si existe. */
+function gitInstalled(parsed: { host: string; owner: string; repo: string }, d: ResourceDirs): string | undefined {
+	const dir = join(d.gitRoot, parsed.host, parsed.owner, parsed.repo);
+	return existsSync(dir) ? packageEntry(dir) : undefined;
 }
 
 function resolveExtensionItem(item: string, d: ResourceDirs): string {
@@ -105,10 +113,8 @@ function resolveExtensionItem(item: string, d: ResourceDirs): string {
 	// github:o/r directo
 	if (item.includes("/")) {
 		const parsed = parseGitSource(`git:${item}`);
-		if (parsed) {
-			const dir = join(d.gitRoot, parsed.host, parsed.owner, parsed.repo);
-			if (existsSync(dir)) return packageEntry(dir);
-		}
+		const entry = parsed ? gitInstalled(parsed, d) : undefined;
+		if (entry) return entry;
 	}
 	const settings = readSettings(d);
 	// 2. extensions[] (paths directos) por basename
@@ -131,8 +137,8 @@ function resolveExtensionItem(item: string, d: ResourceDirs): string {
 		}
 		const parsed = parseGitSource(src);
 		if (parsed && parsed.repo === item) {
-			const dir = join(d.gitRoot, parsed.host, parsed.owner, parsed.repo);
-			if (existsSync(dir)) return packageEntry(dir);
+			const entry = gitInstalled(parsed, d);
+			if (entry) return entry;
 		}
 	}
 	throw new Error(`pi-herdr: extensión "${item}" no encontrada (dirs + settings). Usa \`pi list\` para ver las instaladas.`);

@@ -3,7 +3,7 @@
  *
  * Regla herdr: ^[a-z][a-z0-9_-]{0,31}$ y único entre agentes vivos.
  */
-import { agentList, type RunFn } from "./herdr.ts";
+import { agentList, type AgentInfo, type RunFn } from "./herdr.ts";
 
 const NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 const MAX_LEN = 32;
@@ -30,9 +30,13 @@ export function withSuffix(base: string, suffix: string): string {
 	return base.slice(0, room) + suffix;
 }
 
+/** Nombres definidos de una lista de agentes herdr (chequeos de colisión). */
+export function nameSet(agents: AgentInfo[]): Set<string> {
+	return new Set(agents.flatMap((a) => (a.name ? [a.name] : [])));
+}
+
 export async function liveNames(run: RunFn): Promise<Set<string>> {
-		const agents = await agentList(run);
-		return new Set(agents.flatMap((a) => (a.name ? [a.name] : [])));
+	return nameSet(await agentList(run));
 }
 
 /**

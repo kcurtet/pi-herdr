@@ -11,6 +11,13 @@ import type { RunFn } from "./herdr.ts";
 
 export type CleanupDecision = { action: "remove" } | { action: "keep"; reason: "dirty" | "unmerged" };
 
+/** Worktree de un despacho: repo padre, directorio y rama hd/<name>. */
+export interface WorktreeRef {
+	repo: string;
+	dir: string;
+	branch: string;
+}
+
 /** Pure: decide a partir del status --porcelain y si la rama está merged en HEAD. */
 export function decideCleanup(statusPorcelain: string, mergedIntoHead: boolean): CleanupDecision {
 	if (statusPorcelain.trim() !== "") return { action: "keep", reason: "dirty" };
@@ -25,7 +32,7 @@ async function git(run: RunFn, args: string[]): Promise<{ code: number; stdout: 
 export async function createWorktree(
 	run: RunFn,
 	o: { repo: string; name: string },
-): Promise<{ repo: string; dir: string; branch: string }> {
+): Promise<WorktreeRef> {
 	const top = await git(run, [o.repo, "rev-parse", "--show-toplevel"]);
 	if (top.code !== 0) {
 		throw new Error(`pi-herdr: "${o.repo}" no es un repo git (worktree:true lo requiere)`);
@@ -45,7 +52,7 @@ export async function createWorktree(
 
 export async function cleanupWorktree(
 	run: RunFn,
-	o: { repo: string; dir: string; branch: string },
+	o: WorktreeRef,
 ): Promise<{ removed: boolean; reason?: string }> {
 	// repo-path del worktree puede diferir; el repo original siempre es válido
 	const status = await git(run, [o.dir, "status", "--porcelain"]);
