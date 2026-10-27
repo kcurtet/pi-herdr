@@ -90,16 +90,29 @@ function parse<T>(stdout: string, what: string): HerdrEnvelope<T> {
 
 export async function tabCreate(
 	run: RunFn,
-	o: { cwd: string; label: string },
+	o: { cwd: string; label: string; workspace?: string },
 ): Promise<{ paneId: string; tabId: string; workspaceId: string }> {
-	const stdout = await runOk(run, ["tab", "create", "--cwd", o.cwd, "--label", o.label, "--no-focus"]);
+	// issue #11: sin --workspace herdr ubica la tab en el workspace ENFOCADO por el
+	// usuario; con el id explícito aterriza en el de la sesión despachante.
+	const args = ["tab", "create"];
+	if (o.workspace) args.push("--workspace", o.workspace);
+	args.push("--cwd", o.cwd, "--label", o.label, "--no-focus");
+	const stdout = await runOk(run, args);
 	const r = parse<{ root_pane: { pane_id: string; workspace_id: string }; tab: { tab_id: string } }>(stdout, "tab create").result;
 	return { paneId: r.root_pane.pane_id, tabId: r.tab.tab_id, workspaceId: r.root_pane.workspace_id };
 }
 
-export async function paneSplitRight(run: RunFn, o: { cwd: string }): Promise<{ paneId: string }> {
-	// pane split no tiene --no-focus: el split no roba foco por diseño del flag set real
-	const stdout = await runOk(run, ["pane", "split", "--current", "--direction", "right", "--cwd", o.cwd]);
+export async function paneSplitRight(
+	run: RunFn,
+	o: { cwd: string; pane?: string },
+): Promise<{ paneId: string }> {
+	// pane split no tiene --no-focus: el split no roba foco por diseño del flag set real.
+	// issue #11: --current apunta al pane ENFOCADO por el usuario; con pane explícito
+	// usamos el PANE_ID posicional para partir del pane de esta sesión.
+	const args = o.pane
+		? ["pane", "split", o.pane, "--direction", "right", "--cwd", o.cwd]
+		: ["pane", "split", "--current", "--direction", "right", "--cwd", o.cwd];
+	const stdout = await runOk(run, args);
 	const r = parse<{ pane: { pane_id: string } }>(stdout, "pane split").result;
 	return { paneId: r.pane.pane_id };
 }
