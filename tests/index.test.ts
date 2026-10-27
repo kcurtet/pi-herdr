@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Registry, shutdownCleanup, stopAgent, stopDispatch, type DispatchRecord } from "../src/registry.ts";
 import extension from "../index.ts";
@@ -118,22 +121,30 @@ describe("stopDispatch (herdr_stop wiring)", () => {
 });
 
 describe("factory de la extensión", () => {
-	function fakeApi() {
+	function fakeApi(opts: { sendMessageThrows?: boolean } = {}) {
 		const tools: { name: string; parameters: Record<string, unknown> }[] = [];
 		const handlers: { event: string; fn: (event: unknown, ctx: unknown) => Promise<void> | void }[] = [];
 		const commands: { name: string; description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }[] = [];
+		const messages: { msg: Record<string, unknown>; opts?: unknown }[] = [];
 		return {
 			api: {
 				registerTool: (t: { name: string; parameters: Record<string, unknown> }) => tools.push(t),
 				on: (event: string, fn: (event: unknown, ctx: unknown) => Promise<void> | void) => handlers.push({ event, fn }),
 				registerCommand: (name: string, def: { description: string; handler: unknown; getArgumentCompletions?: (p: string) => unknown }) =>
 					commands.push({ name, ...def }),
-				sendMessage: () => {},
+				sendMessage: opts.sendMessageThrows
+					? () => {
+							throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
+						}
+					: (msg: Record<string, unknown>, o?: unknown) => {
+							messages.push({ msg, opts: o });
+						},
 				appendEntry: () => {},
 			},
 			tools,
 			handlers,
 			commands,
+			messages,
 		};
 	}
 
@@ -149,6 +160,57 @@ describe("factory de la extensión", () => {
 		]);
 		expect(handlers.map((h) => h.event)).toContain("session_start");
 		expect(handlers.map((h) => h.event)).toContain("session_shutdown");
+	});
+
+	/** PI_HOME aislado con config opcional de pi-herdr; restaura todo al salir. */
+	async function withIsolatedPiHome(config: string | null, fn: () => Promise<void> | void): Promise<void> {
+		const prev = process.env.PI_HOME;
+		const home = mkdtempSync(join(tmpdir(), "pi-herdr-test-"));
+		if (config !== null) {
+			mkdirSync(join(home, "extensions-config"), { recursive: true });
+			writeFileSync(join(home, "extensions-config", "pi-herdr.json"), config);
+		}
+		process.env.PI_HOME = home;
+		try {
+			await fn();
+		} finally {
+			if (prev === undefined) delete process.env.PI_HOME;
+			else process.env.PI_HOME = prev;
+			rmSync(home, { recursive: true, force: true });
+		}
+	}
+
+	it("config con warnings NO tumba la carga: sendMessage jamás durante load (rev issue #4, F1)", async () => {
+		await withIsolatedPiHome("{ json roto", () => {
+			const { api } = fakeApi({ sendMessageThrows: true });
+			expect(() => extension(api as never)).not.toThrow();
+		});
+	});
+
+	it("session_start: config con warnings → UN herdr-config-warning tras cargar, cero durante la carga", async () => {
+		await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "matrix" } }), async () => {
+			const { api, handlers, messages } = fakeApi();
+			extension(api as never);
+			expect(messages).toEqual([]); // nada durante la carga
+			const starts = handlers.filter((h) => h.event === "session_start");
+			expect(starts.length).toBeGreaterThan(0);
+			for (const h of starts) await h.fn(undefined, { sessionManager: { getBranch: () => [] } });
+			const warnings = messages.filter((m) => m.msg.customType === "herdr-config-warning");
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]!.msg.display).toBe(true);
+			expect(warnings[0]!.opts).toBeUndefined(); // sin triggerTurn
+		});
+	});
+
+	it("session_start: config sano → cero warnings", async () => {
+		await withIsolatedPiHome(JSON.stringify({ defaults: { topology: "pane" } }), async () => {
+			const { api, handlers, messages } = fakeApi();
+			extension(api as never);
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, { sessionManager: { getBranch: () => [] } });
+			}
+			expect(messages.filter((m) => m.msg.customType === "herdr-config-warning")).toHaveLength(0);
+		});
 	});
 
 	it("schema de herdr_dispatch: task requerida, topology enum tab|pane|workspace, skills/extensions unión bool|array", () => {
