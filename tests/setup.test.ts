@@ -2,7 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode } from "../src/setup.ts";
+import { localRun } from "../src/herdr.ts";
+import { fakeRun, ok, waitFor } from "./helpers.ts";
+import {
+	detectSetupCommand,
+	LOCKFILE_COMMANDS,
+	parseSetupMode,
+	runSetup,
+	serializeSetup,
+	SETUP_TIMEOUT_MS,
+} from "../src/setup.ts";
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -70,7 +79,8 @@ describe("detectSetupCommand (pura, prioridad lockfiles)", () => {
 		expect(detectSetupCommand(tmpRepo([]))).toBeUndefined();
 	});
 
-	it("LOCKFILE_COMMANDS: el orden del array ES la prioridad spec (pnpm>bun>yarn>npm)", () => {
+	describe("LOCKFILE_COMMANDS", () => {
+	it("el orden del array ES la prioridad spec (pnpm>bun>yarn>npm)", () => {
 		expect(LOCKFILE_COMMANDS.map((c) => c.file)).toEqual([
 			"pnpm-lock.yaml",
 			"bun.lock",
@@ -78,5 +88,104 @@ describe("detectSetupCommand (pura, prioridad lockfiles)", () => {
 			"yarn.lock",
 			"package-lock.json",
 		]);
+	});
+	});
+});
+
+describe("runSetup", () => {
+	it("éxito: bash -c <cmd> en cwd con timeout inyectado; devuelve elapsed", async () => {
+		const { run, calls } = fakeRun({ "bash -c": ok("") });
+		const r = await runSetup(run, { command: "pnpm install --frozen-lockfile", cwd: "/w", timeoutMs: 100 });
+		expect(r.elapsedMs).toBeGreaterThanOrEqual(0);
+		expect(calls[0]).toEqual({
+			file: "bash",
+			args: ["-c", "pnpm install --frozen-lockfile"],
+			opts: { cwd: "/w", timeoutMs: 100 },
+		});
+	});
+
+	it("SETUP_TIMEOUT_MS default = 10 min (spec R8)", () => {
+		expect(SETUP_TIMEOUT_MS).toBe(600_000);
+	});
+
+	it("fallo exit 1: error con comando, exit code y SOLO el tail de stderr (~2000 chars)", async () => {
+		const lines = Array.from({ length: 300 }, (_, i) => `line-${i}`);
+		const stderr = `${lines.join("\n")}\nFINAL-LINE`;
+		const { run } = fakeRun({ "bash -c": { code: 1, stdout: "", stderr } });
+		const err = await runSetup(run, { command: "npm ci", cwd: "/w", timeoutMs: 100 }).catch((e) => e);
+		expect(err.message).toContain('setup "npm ci" falló (exit 1)');
+		expect(err.message).toContain("FINAL-LINE");
+		expect(err.message).not.toContain("line-0");
+	});
+
+	it("fallo con stderr vacía: tail desde stdout", async () => {
+		const { run } = fakeRun({ "bash -c": { code: 2, stdout: "OUT-TAIL", stderr: "" } });
+		const err = await runSetup(run, { command: "npm ci", cwd: "/w", timeoutMs: 100 }).catch((e) => e);
+		expect(err.message).toContain("exit 2");
+		expect(err.message).toContain("OUT-TAIL");
+	});
+
+	it("timeout real (localRun): motivo timeout y tail con la salida parcial (spec D3/D4)", async () => {
+		const err = await runSetup(localRun, {
+			command: "node -e \"console.log('lento-pre-kill'); setTimeout(() => {}, 5000)\"",
+			cwd: process.cwd(),
+			timeoutMs: 200,
+		}).catch((e) => e);
+		expect(err.message).toContain("(timeout)");
+		expect(err.message).toContain("lento-pre-kill");
+	}, 10_000);
+});
+
+describe("serializeSetup", () => {
+	it("la segunda NO arranca hasta que acaba la primera (mutex en-proceso, spec D6)", async () => {
+		const started: string[] = [];
+		const mk = (id: string) => {
+			let release!: () => void;
+			const gate = new Promise<void>((r) => (release = r));
+			return {
+				fn: () =>
+					new Promise<void>((res) => {
+						started.push(id);
+						gate.then(res);
+					}),
+				release,
+			};
+		};
+		const a = mk("a");
+		const b = mk("b");
+		const pa = serializeSetup(a.fn);
+		const pb = serializeSetup(b.fn);
+		await waitFor(() => started.length === 1, "a arranca en la primera microtask");
+		expect(started).toEqual(["a"]); // b aún no arrancó
+		a.release();
+		await pa;
+		await waitFor(() => started.includes("b"), "b arranca tras a");
+		b.release();
+		await pb;
+	});
+
+	it("el fallo de la primera no rompe a la segunda (serializa ejecución, no fallos)", async () => {
+		const started: string[] = [];
+		const mk = (id: string, fail: boolean) => {
+			let release!: () => void;
+			const gate = new Promise<void>((r) => (release = r));
+			return {
+				fn: () =>
+					new Promise<void>((res, rej) => {
+						started.push(id);
+						gate.then(() => (fail ? rej(new Error(`${id} boom`)) : res()));
+					}),
+				release,
+			};
+		};
+		const bad = mk("bad", true);
+		const good = mk("good", false);
+		const pBad = serializeSetup(bad.fn).catch((e) => e);
+		const pGood = serializeSetup(good.fn);
+		bad.release();
+		expect(await pBad).toBeInstanceOf(Error);
+		await waitFor(() => started.includes("good"), "good arranca tras bad fallido");
+		good.release();
+		await pGood; // resuelve aunque bad rechazó
 	});
 });

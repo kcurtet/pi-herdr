@@ -9,3 +9,5 @@ Rama: `feat/003-worktree-setup` (base: main @ bafab62). Spec: docs/specs/003-wor
 ## Tareas
 
 Task 1: complete (commit f7a7c78, tests: `npx vitest run tests/herdr.test.ts` → 17/17 + typecheck OK)
+Task 2: complete (commit cc66da5, tests: `npx vitest run tests/setup.test.ts tests/worktree.test.ts` → 22/22 + typecheck OK)
+  Ruling: parseSetupMode(undefined, true) → {kind:"auto"} (spec D1 "omitir = auto siempre" en worktree); undefined + false → {kind:"none"} (cero regresión en dispatches sin worktree) — coste si mal: dispatches existentes sin worktree errorarían.

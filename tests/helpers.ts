@@ -11,7 +11,8 @@ export function fx(name: string): string {
 	return readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8");
 }
 
-/** Mock RunFn: enruta por los dos primeros args (subcomando) y registra todo. */
+/** Mock RunFn: enruta por los dos primeros args (subcomando) y registra todo.
+ * Fallback: "<file> <args...>" para binarios no-herdr (p.ej. "bash -c"). */
 export function fakeRun(
 	routes: Record<string, { code: number; stdout: string; stderr?: string }>,
 ): { run: RunFn; calls: RecordedCall[] } {
@@ -19,7 +20,8 @@ export function fakeRun(
 	const run: RunFn = async (file, args, opts) => {
 		calls.push({ file, args, opts });
 		const key = args.slice(0, 2).join(" ");
-		const r = routes[key];
+		const altKey = [file, args[0] ?? ""].join(" ");
+		const r = routes[key] ?? routes[altKey];
 		if (!r) return { code: 1, stdout: "", stderr: `unmocked: ${key}` };
 		return { code: r.code, stdout: r.stdout, stderr: r.stderr ?? "" };
 	};

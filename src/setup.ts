@@ -7,6 +7,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import type { RunFn } from "./herdr.ts";
 
 /** Modo resuelto de setupCommand. */
 export type SetupMode =
@@ -52,4 +53,58 @@ export function detectSetupCommand(repoRoot: string, exists: ExistsFn = existsSy
 		if (exists(join(repoRoot, file))) return command;
 	}
 	return undefined;
+}
+
+/** Timeout propio del setup (spec R8): 10 min; los comandos de control herdr siguen a 15s. */
+export const SETUP_TIMEOUT_MS = 600_000;
+
+const TAIL_CHARS = 2_000;
+
+/** Tail de salida para errores: stderr con fallback a stdout, últimos ~2000 chars. */
+function tailOf(stderr: string, stdout: string): string {
+	return (stderr.trim() || stdout.trim()).slice(-TAIL_CHARS);
+}
+
+/**
+ * Mutex en-proceso (spec D6): los setups de dispatches concurrentes corren uno
+ * tras otro. Serializa la EJECUCIÓN, no los fallos: si una setup rechaza, la
+ * siguiente arranca igual (queue = next.catch(() => undefined)).
+ */
+let queue: Promise<unknown> = Promise.resolve();
+export function serializeSetup<T>(fn: () => Promise<T>): Promise<T> {
+	const next = queue.then(fn, fn);
+	queue = next.catch(() => undefined);
+	return next;
+}
+
+/**
+ * Ejecuta el setup: `bash -c <command>` oculto en cwd (dir del worktree), con
+ * timeout propio. Éxito → { elapsedMs }. Fallo (exit != 0 o timeout) → throw
+ * con comando + motivo + tail de salida (output parcial del Error en timeout,
+ * adjuntado por localRun).
+ */
+export async function runSetup(
+	run: RunFn,
+	o: { command: string; cwd: string; timeoutMs?: number },
+): Promise<{ elapsedMs: number }> {
+	return serializeSetup(async () => {
+		const start = Date.now();
+		let result: { code: number; stdout: string; stderr: string };
+		try {
+			result = await run("bash", ["-c", o.command], {
+				cwd: o.cwd,
+				timeoutMs: o.timeoutMs ?? SETUP_TIMEOUT_MS,
+			});
+		} catch (err) {
+			// timeout de la RunFn: Error con stdout/stderr parciales adjuntos (T1)
+			const e = err as Error & { stdout?: string; stderr?: string };
+			throw new Error(`pi-herdr: setup "${o.command}" falló (timeout)\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
+		}
+		if (result.code !== 0) {
+			throw new Error(
+				`pi-herdr: setup "${o.command}" falló (exit ${result.code})\n${tailOf(result.stderr, result.stdout)}`,
+			);
+		}
+		return { elapsedMs: Date.now() - start };
+	});
 }
