@@ -17,4 +17,4 @@ Task 3: complete (commit f819ba2, tests: suite completa `npx vitest run` → 236
 Task 4: complete (commit 9580501, tests: suite completa `npx vitest run` → 243/243 + typecheck OK)
   Ruling: con "omitir = auto siempre" (decisión humana), los 3 tests de worktree pre-existentes (repo mockeado /w/repo sin lockfiles reales) pasaron a necesitar setupCommand:"none" explícito — coste si mal: falsos rojos por el default opinionado, que ES el contrato spec.
   minor (deferred): WatchEvent y defaultResourceDirs importados sin uso en src/dispatch.ts L18/L22 (pre-existente, lens-only; tsc no reclama). → RESUELTO en T5: el delta del lens los escalaba a blocker en cada edit; fix de riesgo cero (tsc+suite verifican), imports limpiados.
-Task 5: complete (commit $(git log --format=%h -1), tests: `npx vitest run` → 245/245 + typecheck OK)
+Task 5: complete (commit 9ca9a4d, tests: `npx vitest run` → 245/245 + typecheck OK)

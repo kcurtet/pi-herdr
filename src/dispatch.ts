@@ -17,7 +17,7 @@ import {
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { armWatcher, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
-import { createWorktree, cleanupWorktree, resolveRepoRoot, type WorktreeRef } from "./worktree.ts";
+import { createWorktree, resolveRepoRoot, rollbackNote, type WorktreeRef } from "./worktree.ts";
 import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode, runSetup } from "./setup.ts";
 import { type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
@@ -132,7 +132,7 @@ export function dispatchReport(r: DispatchResult): string {
 	const base = `Despachado ${r.agent} en ${r.paneId} (task ${r.taskId}${r.worktreePath ? `, worktree ${r.worktreePath}` : ""}).`;
 	const setup = r.setupNote ? ` ${r.setupNote}.` : "";
 	if (r.initialBlocked) {
-			return `${base}${setup} ATENCIÓN: el prompt inicial fue rechazado con agent_blocked — el agente espera aprobación o input en su pane; decídelo ahí o con herdr_prompt.`;
+		return `${base}${setup} ATENCIÓN: el prompt inicial fue rechazado con agent_blocked — el agente espera aprobación o input en su pane; decídelo ahí o con herdr_prompt.`;
 	}
 	return `${base}${setup} Recibirás el resultado como evento; sigue con tu trabajo.`;
 }
@@ -217,11 +217,8 @@ export async function dispatch(
 			setupNote = `setup OK (${setupCommand}, ${Math.round(elapsedMs / 1000)}s)`;
 		} catch (err) {
 			// spec 003 D4: aún no hay topología ni agente — solo rollback del
-		// worktree, conservador (mismo formato de nota que el fallo de agentStart)
-			const report = await cleanupWorktree(deps.run, worktree).catch(() => ({ removed: false, reason: "cleanup falló" }));
-			const note = report.removed
-				? ` (worktree ${worktree.dir} eliminado en rollback)`
-				: ` (worktree ${worktree.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
+			// worktree, conservador (rollbackNote: wording compartido con agentStart)
+			const note = await rollbackNote(deps.run, worktree);
 			throw new Error(`${(err as Error).message}${note}`);
 		}
 	}
@@ -257,10 +254,7 @@ export async function dispatch(
 		});
 		let note = "";
 		if (worktree) {
-			const report = await cleanupWorktree(deps.run, worktree).catch(() => ({ removed: false, reason: "cleanup falló" }));
-			note = report.removed
-				? ` (worktree ${worktree.dir} eliminado en rollback)`
-				: ` (worktree ${worktree.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
+			note = await rollbackNote(deps.run, worktree);
 		}
 		throw new Error(`${(err as Error).message}${closeNote}${note}`);
 	}

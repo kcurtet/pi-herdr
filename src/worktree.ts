@@ -87,3 +87,11 @@ export async function cleanupWorktree(
 	}
 	return { removed: true };
 }
+
+/** Nota de rollback tras cleanup conservador: wording único para todos los catch de dispatch. */
+export async function rollbackNote(run: RunFn, w: WorktreeRef): Promise<string> {
+	const report = await cleanupWorktree(run, w).catch(() => ({ removed: false, reason: "cleanup falló" }));
+	return report.removed
+		? ` (worktree ${w.dir} eliminado en rollback)`
+		: ` (worktree ${w.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
+}
