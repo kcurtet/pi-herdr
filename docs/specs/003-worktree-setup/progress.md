@@ -18,3 +18,16 @@ Task 4: complete (commit 9580501, tests: suite completa `npx vitest run` → 243
   Ruling: con "omitir = auto siempre" (decisión humana), los 3 tests de worktree pre-existentes (repo mockeado /w/repo sin lockfiles reales) pasaron a necesitar setupCommand:"none" explícito — coste si mal: falsos rojos por el default opinionado, que ES el contrato spec.
   minor (deferred): WatchEvent y defaultResourceDirs importados sin uso en src/dispatch.ts L18/L22 (pre-existente, lens-only; tsc no reclama). → RESUELTO en T5: el delta del lens los escalaba a blocker en cada edit; fix de riesgo cero (tsc+suite verifican), imports limpiados.
 Task 5: complete (commit 9ca9a4d, tests: `npx vitest run` → 245/245 + typecheck OK)
+
+## Revisión final (2 ejes, contexto fresco)
+
+- **Estándares** (rev-003-estandares): MERGE. Fix aplicado: Duplicated Code → extraído `rollbackNote` en worktree.ts, consumido por ambos catches de dispatch (commit 41a2c97). Indent triple-tab en dispatchReport (defecto propio) corregido ídem.
+- **Spec** (rev-003-spec): MERGE, sin hallazgos materiales. R1-R10 + 10 GWT cubiertos; scope creep solo limpiezas documentadas.
+
+### Minors diferidos (issue)
+1. Seam `ExistsFn` en detectSetupCommand sin callers/tests (Speculative Generality leve).
+2. Export de `serializeSetup` solo para tests (defensible: unidad bajo prueba del mutex).
+3. runSetup etiqueta cualquier throw de RunFn como "(timeout)" — correcto con contrato localRun, falso ante RunFn inyectada out-of-contract.
+4. elapsedMs excluye la espera en cola del mutex — nota "setup OK (Xs)" subestima el tiempo percibido.
+5. Test explícito kind≠pi + setupCommand ausente (permitido por código, trivial).
+
