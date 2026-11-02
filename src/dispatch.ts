@@ -15,11 +15,11 @@ import {
 	type RunFn,
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
-import { armWatcher, type WatchEvent, type WaitPhase } from "./watch.ts";
+import { armWatcher, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, cleanupWorktree, resolveRepoRoot, type WorktreeRef } from "./worktree.ts";
 import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode, runSetup } from "./setup.ts";
-import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
+import { type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
 import type { SettleHandler } from "./settle.ts";
@@ -212,8 +212,18 @@ export async function dispatch(
 	// fallo (abort + rollback) se cablea en la tarea 5
 	let setupNote: string | undefined;
 	if (worktree !== undefined && setupCommand !== undefined) {
-		const { elapsedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
-		setupNote = `setup OK (${setupCommand}, ${Math.round(elapsedMs / 1000)}s)`;
+		try {
+			const { elapsedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
+			setupNote = `setup OK (${setupCommand}, ${Math.round(elapsedMs / 1000)}s)`;
+		} catch (err) {
+			// spec 003 D4: aún no hay topología ni agente — solo rollback del
+		// worktree, conservador (mismo formato de nota que el fallo de agentStart)
+			const report = await cleanupWorktree(deps.run, worktree).catch(() => ({ removed: false, reason: "cleanup falló" }));
+			const note = report.removed
+				? ` (worktree ${worktree.dir} eliminado en rollback)`
+				: ` (worktree ${worktree.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
+			throw new Error(`${(err as Error).message}${note}`);
+		}
 	}
 
 	// topología → paneId (dónde vive el agente) + targetId (qué se cierra).

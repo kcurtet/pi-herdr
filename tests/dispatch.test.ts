@@ -349,7 +349,6 @@ describe("dispatch — worktree", () => {
 			return run(file, args, opts);
 		};
 		const { deps } = makeDeps({ run: runBoth });
-		const agent = "revisa-login";
 		await expect(dispatch(deps, { task: "revisa el login", worktree: true, setupCommand: "none" }, { HERDR_ENV: "1" })).rejects.toThrow(
 			/start-boom[\s\S]*worktree/i,
 		);
@@ -374,6 +373,7 @@ describe("dispatch — worktree", () => {
 		repoRoot: string;
 		bash?: { code: number; stdout: string; stderr: string };
 		registry?: import("../src/registry.ts").Registry;
+		gitRoutes?: Record<string, { code: number; stdout: string; stderr?: string }>;
 	}) {
 		const { run, calls } = fakeRun({ ...routes, "bash -c": o.bash ?? ok("") });
 		const gitCalls: { file: string; args: string[] }[] = [];
@@ -381,6 +381,8 @@ describe("dispatch — worktree", () => {
 			if (file === "git") {
 				gitCalls.push({ file, args });
 				if (args.includes("rev-parse")) return ok(o.repoRoot);
+				const r = o.gitRoutes?.[args[2] ?? ""];
+				if (r) return { code: r.code, stdout: r.stdout, stderr: r.stderr ?? "" };
 				return ok("");
 			}
 			return run(file, args, opts);
@@ -463,6 +465,35 @@ describe("dispatch — worktree", () => {
 		).rejects.toThrow(/no válido/);
 		expect(gitCalls).toHaveLength(0);
 		expect(calls.find((c) => c.args[1] === "create")).toBeUndefined();
+	});
+
+	it("setup falla (exit 1): aborta ANTES de tab/agente, rollback elimina worktree, error con comando+exit+tail (R6)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, calls, gitCalls } = mkSetupDeps({
+			repoRoot: repo,
+			bash: { code: 1, stdout: "", stderr: "EFAIL tail" },
+			gitRoutes: { branch: { code: 0, stdout: "* main\n  hd/revisa-login\n" } },
+		});
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/pnpm install --frozen-lockfile[\s\S]*exit 1[\s\S]*EFAIL tail[\s\S]*eliminado en rollback/,
+		);
+		expect(calls.find((c) => c.args[1] === "create")).toBeUndefined(); // sin tab
+		expect(calls.find((c) => c.args[1] === "start")).toBeUndefined(); // sin agente
+		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(true);
+		expect(gitCalls.some((c) => c.args.includes("-d"))).toBe(true);
+	});
+
+	it("setup falla y worktree quedó dirty: CONSERVADO, sin worktree remove (foco de revisión 2)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, gitCalls } = mkSetupDeps({
+			repoRoot: repo,
+			bash: { code: 1, stdout: "", stderr: "EFAIL" },
+			gitRoutes: { status: { code: 0, stdout: " M generado.ts" } },
+		});
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/CONSERVADO: dirty/,
+		);
+		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(false);
 	});
 
 	it("sin worktree: literal/auto → error temprano (R5); none/omitido → dispatch normal", async () => {
