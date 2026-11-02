@@ -29,15 +29,20 @@ async function git(run: RunFn, args: string[]): Promise<{ code: number; stdout: 
 	return run("git", ["-C", ...args]);
 }
 
+/** Toplevel del repo que contiene `repo` (misma resolución que usa createWorktree). */
+export async function resolveRepoRoot(run: RunFn, repo: string): Promise<string> {
+	const top = await git(run, [repo, "rev-parse", "--show-toplevel"]);
+	if (top.code !== 0) {
+		throw new Error(`pi-herdr: "${repo}" no es un repo git (worktree:true lo requiere)`);
+	}
+	return top.stdout.trim().split("\n")[0]!;
+}
+
 export async function createWorktree(
 	run: RunFn,
 	o: { repo: string; name: string },
 ): Promise<WorktreeRef> {
-	const top = await git(run, [o.repo, "rev-parse", "--show-toplevel"]);
-	if (top.code !== 0) {
-		throw new Error(`pi-herdr: "${o.repo}" no es un repo git (worktree:true lo requiere)`);
-	}
-	const repoRoot = top.stdout.trim().split("\n")[0]!;
+	const repoRoot = await resolveRepoRoot(run, o.repo);
 	const dir = join(dirname(repoRoot), ".hd-worktrees", o.name);
 	if (existsSync(dir)) {
 		throw new Error(`pi-herdr: el worktree destino ya existe: ${dir} (despacho previo sin limpiar)`);
@@ -81,4 +86,12 @@ export async function cleanupWorktree(
 		return { removed: true, reason: `rama ${o.branch} no borrada: ${del.stderr.trim().slice(0, 120)}` };
 	}
 	return { removed: true };
+}
+
+/** Nota de rollback tras cleanup conservador: wording único para todos los catch de dispatch. */
+export async function rollbackNote(run: RunFn, w: WorktreeRef): Promise<string> {
+	const report = await cleanupWorktree(run, w).catch(() => ({ removed: false, reason: "cleanup falló" }));
+	return report.removed
+		? ` (worktree ${w.dir} eliminado en rollback)`
+		: ` (worktree ${w.dir} CONSERVADO: ${report.reason ?? "pendiente"} — revisalo a mano)`;
 }

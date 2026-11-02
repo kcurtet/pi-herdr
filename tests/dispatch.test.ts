@@ -270,7 +270,7 @@ describe("dispatch — worktree", () => {
 		};
 		const registry = new Registry();
 		const { deps } = makeDeps({ run: runBoth, registry });
-		const r = await dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" });
+		const r = await dispatch(deps, { task: "revisa el login", worktree: true, setupCommand: "none" }, { HERDR_ENV: "1" });
 		expect(r.worktreePath).toBe("/w/.hd-worktrees/" + r.agent);
 		expect(gitCalls[0].args).toContain("rev-parse");
 		expect(gitCalls.find((c) => c.args[2] === "worktree")!.args).toContain("-b");
@@ -292,7 +292,7 @@ describe("dispatch — worktree", () => {
 		};
 		const registry = new Registry();
 		const { deps } = makeDeps({ run: runBoth, registry, config: { worktree: true } });
-		const r = await dispatch(deps, { task: "revisa el login" }, { HERDR_ENV: "1" });
+		const r = await dispatch(deps, { task: "revisa el login", setupCommand: "none" }, { HERDR_ENV: "1" });
 		expect(r.worktreePath).toBe("/w/.hd-worktrees/" + r.agent);
 		expect(gitCalls.find((c) => c.args[2] === "worktree")!.args).toContain("add");
 		const tabCall = calls.find((c) => c.args[1] === "create")!;
@@ -349,8 +349,7 @@ describe("dispatch — worktree", () => {
 			return run(file, args, opts);
 		};
 		const { deps } = makeDeps({ run: runBoth });
-		const agent = "revisa-login";
-		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true, setupCommand: "none" }, { HERDR_ENV: "1" })).rejects.toThrow(
 			/start-boom[\s\S]*worktree/i,
 		);
 		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(true);
@@ -367,6 +366,154 @@ describe("dispatch — worktree", () => {
 		await expect(dispatch(deps, { task: "revisa", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(/repo git/i);
 		expect(calls.filter((c) => c.args[1] === "create")).toHaveLength(0);
 	});
+
+	describe("dispatch — setup (spec 003)", () => {
+	/** Repo REAL en tmpdir con lockfiles (detección usa existsSync) + git/bash mockados. */
+	function mkSetupDeps(o: {
+		repoRoot: string;
+		bash?: { code: number; stdout: string; stderr: string };
+		registry?: import("../src/registry.ts").Registry;
+		gitRoutes?: Record<string, { code: number; stdout: string; stderr?: string }>;
+	}) {
+		const { run, calls } = fakeRun({ ...routes, "bash -c": o.bash ?? ok("") });
+		const gitCalls: { file: string; args: string[] }[] = [];
+		const runBoth: import("../src/herdr.ts").RunFn = async (file, args, opts) => {
+			if (file === "git") {
+				gitCalls.push({ file, args });
+				if (args.includes("rev-parse")) return ok(o.repoRoot);
+				const r = o.gitRoutes?.[args[2] ?? ""];
+				if (r) return { code: r.code, stdout: r.stdout, stderr: r.stderr ?? "" };
+				return ok("");
+			}
+			return run(file, args, opts);
+		};
+		const registry = o.registry ?? new Registry();
+		const { deps } = makeDeps({ run: runBoth, registry });
+		return { deps, calls, gitCalls, registry };
+	}
+
+	function tmpRepo(files: string[]): string {
+		const repo = mkdtempSync(join(tmpdir(), "pi-herdr-dsp-"));
+		for (const f of files) writeFileSync(join(repo, f), "");
+		return repo;
+	}
+
+	it("auto: pnpm gana sobre package-lock; setupNote + record + herdr_agents; bash ANTES de tab", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml", "package-lock.json"]);
+		const { deps, calls, registry } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" });
+		expect(r.setupNote).toMatch(/setup OK \(pnpm install --frozen-lockfile, \d+s\)/);
+		expect(registry.get(r.agent)!.setupCommand).toBe("pnpm install --frozen-lockfile");
+		expect(listDispatches(deps)).toContain("setup pnpm install --frozen-lockfile");
+		expect(dispatchReport(r)).toContain("setup OK");
+		const bashIdx = calls.findIndex((c) => c.file === "bash");
+		const tabIdx = calls.findIndex((c) => c.args[1] === "create");
+		expect(bashIdx).toBeGreaterThan(-1);
+		expect(bashIdx).toBeLessThan(tabIdx); // foco de revisión 5
+		expect(r.worktreePath).toContain(".hd-worktrees");
+	});
+
+	it("monorepo: cwd en subdir, lockfile en la RAÍZ → detecta igual (foco de revisión 1)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(
+			deps,
+			{ task: "revisa el login", worktree: true, cwd: join(repo, "packages", "x") },
+			{ HERDR_ENV: "1" },
+		);
+		expect(r.setupNote).toMatch(/pnpm install --frozen-lockfile/);
+	});
+
+	it("literal explícito gana sobre lockfiles (R2)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(
+			deps,
+			{ task: "revisa el login", worktree: true, setupCommand: "npm install" },
+			{ HERDR_ENV: "1" },
+		);
+		expect(r.setupNote).toMatch(/setup OK \(npm install, \d+s\)/);
+	});
+
+	it("none: sin bash ni note — behavior actual (R3)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, calls } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(
+			deps,
+			{ task: "revisa el login", worktree: true, setupCommand: "none" },
+			{ HERDR_ENV: "1" },
+		);
+		expect(r.setupNote).toBeUndefined();
+		expect(calls.find((c) => c.file === "bash")).toBeUndefined();
+	});
+
+	it("auto sin lockfile conocido: error lista los 5 ficheros + hint none, CERO side effects (R4)", async () => {
+		const repo = tmpRepo(["Cargo.lock"]);
+		const { deps, calls, gitCalls } = mkSetupDeps({ repoRoot: repo });
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/pnpm-lock\.yaml[\s\S]*bun\.lock[\s\S]*bun\.lockb[\s\S]*yarn\.lock[\s\S]*package-lock\.json[\s\S]*none/s,
+		);
+		expect(gitCalls.find((c) => c.args[2] === "worktree")).toBeUndefined();
+		expect(calls.find((c) => c.args[1] === "create")).toBeUndefined();
+	});
+
+	it("\"\" → error de validación, cero side effects (D1)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, calls, gitCalls } = mkSetupDeps({ repoRoot: repo });
+		await expect(
+			dispatch(deps, { task: "revisa el login", worktree: true, setupCommand: "" }, { HERDR_ENV: "1" }),
+		).rejects.toThrow(/no válido/);
+		expect(gitCalls).toHaveLength(0);
+		expect(calls.find((c) => c.args[1] === "create")).toBeUndefined();
+	});
+
+	it("setup falla (exit 1): aborta ANTES de tab/agente, rollback elimina worktree, error con comando+exit+tail (R6)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, calls, gitCalls } = mkSetupDeps({
+			repoRoot: repo,
+			bash: { code: 1, stdout: "", stderr: "EFAIL tail" },
+			gitRoutes: { branch: { code: 0, stdout: "* main\n  hd/revisa-login\n" } },
+		});
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/pnpm install --frozen-lockfile[\s\S]*exit 1[\s\S]*EFAIL tail[\s\S]*eliminado en rollback/,
+		);
+		expect(calls.find((c) => c.args[1] === "create")).toBeUndefined(); // sin tab
+		expect(calls.find((c) => c.args[1] === "start")).toBeUndefined(); // sin agente
+		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(true);
+		expect(gitCalls.some((c) => c.args.includes("-d"))).toBe(true);
+	});
+
+	it("setup falla y worktree quedó dirty: CONSERVADO, sin worktree remove (foco de revisión 2)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps, gitCalls } = mkSetupDeps({
+			repoRoot: repo,
+			bash: { code: 1, stdout: "", stderr: "EFAIL" },
+			gitRoutes: { status: { code: 0, stdout: " M generado.ts" } },
+		});
+		await expect(dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" })).rejects.toThrow(
+			/CONSERVADO: dirty/,
+		);
+		expect(gitCalls.some((c) => c.args.includes("remove"))).toBe(false);
+	});
+
+	it("sin worktree: literal/auto → error temprano (R5); none/omitido → dispatch normal", async () => {
+		const { deps } = makeDeps({ run: fakeRun(routes).run });
+		await expect(
+			dispatch(deps, { task: "revisa el login", setupCommand: "npm ci" }, { HERDR_ENV: "1" }),
+		).rejects.toThrow(/worktree/);
+		await expect(
+			dispatch(deps, { task: "revisa el login dos", setupCommand: "auto" }, { HERDR_ENV: "1" }),
+		).rejects.toThrow(/worktree/);
+		const rNone = await dispatch(
+			deps,
+			{ task: "revisa el login tres", setupCommand: "none" },
+			{ HERDR_ENV: "1" },
+		);
+		expect(rNone.agent).toBeTruthy();
+		const rOmit = await dispatch(deps, { task: "revisa el login cuatro" }, { HERDR_ENV: "1" });
+		expect(rOmit.setupNote).toBeUndefined();
+	});
+});
 
 	it("prompt inicial agent_blocked → DispatchResult.initialBlocked true y el content de herdr_dispatch lo menciona", async () => {
 		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });

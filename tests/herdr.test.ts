@@ -8,6 +8,7 @@ import {
 	agentStart,
 	assertHerdrEnv,
 	closeTarget,
+	localRun,
 	type RunFn,
 	tabCreate,
 	paneSplitRight,
@@ -177,5 +178,19 @@ describe("errores", () => {
 	it("exit != 0 lanza Error con la salida del comando", async () => {
 		const { run } = fakeRun({ "tab create": { code: 1, stdout: "boom", stderr: "invalid_label" } });
 		await expect(tabCreate(run, { cwd: "/r", label: "x" })).rejects.toThrow(/boom|invalid_label/);
+	});
+});
+
+describe("localRun timeout", () => {
+	it("adjunta stdout/stderr parciales al Error de timeout (spec 003, D3/D4)", async () => {
+		const err = (await localRun(
+			"node",
+			["-e", "console.log('pre-kill'); console.error('pre-kill-err'); setTimeout(() => {}, 5000)"],
+			{ timeoutMs: 200 },
+		).catch((e) => e)) as Error & { stdout?: string; stderr?: string };
+		expect(err).toBeInstanceOf(Error);
+		expect(err.message).toMatch(/timeout/);
+		expect(err.stdout).toContain("pre-kill");
+		expect(err.stderr).toContain("pre-kill-err");
 	});
 });
