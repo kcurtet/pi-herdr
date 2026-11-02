@@ -35,7 +35,14 @@ export const localRun: RunFn = async (file, args, opts) => {
 	} catch (err) {
 		const e = err as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
 		if (e.killed) {
-			throw new Error(`herdr: timeout ejecutando \`${file} ${args.join(" ")}\``);
+			// spec 003 (D3/D4): preservar la salida parcial capturada para el tail de setup
+			const err = new Error(`herdr: timeout ejecutando \`${file} ${args.join(" ")}\``) as Error & {
+				stdout?: string;
+				stderr?: string;
+			};
+			err.stdout = e.stdout ?? "";
+			err.stderr = e.stderr ?? "";
+			throw err;
 		}
 		// ENOENT (herdr no instalado) o exit != 0: superficie uniforme para arriba
 		return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? String(err) };
