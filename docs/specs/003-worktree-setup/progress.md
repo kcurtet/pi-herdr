@@ -8,3 +8,4 @@ Rama: `feat/003-worktree-setup` (base: main @ bafab62). Spec: docs/specs/003-wor
 
 ## Tareas
 
+Task 1: complete (commit f7a7c78, tests: `npx vitest run tests/herdr.test.ts` → 17/17 + typecheck OK)

@@ -29,15 +29,20 @@ async function git(run: RunFn, args: string[]): Promise<{ code: number; stdout: 
 	return run("git", ["-C", ...args]);
 }
 
+/** Toplevel del repo que contiene `repo` (misma resolución que usa createWorktree). */
+export async function resolveRepoRoot(run: RunFn, repo: string): Promise<string> {
+	const top = await git(run, [repo, "rev-parse", "--show-toplevel"]);
+	if (top.code !== 0) {
+		throw new Error(`pi-herdr: "${repo}" no es un repo git (worktree:true lo requiere)`);
+	}
+	return top.stdout.trim().split("\n")[0]!;
+}
+
 export async function createWorktree(
 	run: RunFn,
 	o: { repo: string; name: string },
 ): Promise<WorktreeRef> {
-	const top = await git(run, [o.repo, "rev-parse", "--show-toplevel"]);
-	if (top.code !== 0) {
-		throw new Error(`pi-herdr: "${o.repo}" no es un repo git (worktree:true lo requiere)`);
-	}
-	const repoRoot = top.stdout.trim().split("\n")[0]!;
+	const repoRoot = await resolveRepoRoot(run, o.repo);
 	const dir = join(dirname(repoRoot), ".hd-worktrees", o.name);
 	if (existsSync(dir)) {
 		throw new Error(`pi-herdr: el worktree destino ya existe: ${dir} (despacho previo sin limpiar)`);
