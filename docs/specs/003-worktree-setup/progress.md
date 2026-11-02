@@ -11,3 +11,6 @@ Rama: `feat/003-worktree-setup` (base: main @ bafab62). Spec: docs/specs/003-wor
 Task 1: complete (commit f7a7c78, tests: `npx vitest run tests/herdr.test.ts` → 17/17 + typecheck OK)
 Task 2: complete (commit cc66da5, tests: `npx vitest run tests/setup.test.ts tests/worktree.test.ts` → 22/22 + typecheck OK)
   Ruling: parseSetupMode(undefined, true) → {kind:"auto"} (spec D1 "omitir = auto siempre" en worktree); undefined + false → {kind:"none"} (cero regresión en dispatches sin worktree) — coste si mal: dispatches existentes sin worktree errorarían.
+Task 3: complete (commit f819ba2, tests: suite completa `npx vitest run` → 236/236 + typecheck OK)
+  Ruling: fakeRun (helpers.ts) no incluía `file` en su clave de routing — mi pre-flight lo asumió mal ("bash -c" no matcheaba). Añadido fallback `<file> <args[0]>` con back-compat (clave args sigue ganando) — coste si mal: habría tocado las rutas de todos los tests.
+  Ruling: test del mutex asertaba `started` síncronamente antes de la microtask del queue.then — fix: waitFor antes del expect; el fallo del primer test envenenaba la cola module-level para el segundo (por eso el timeout) — coste si mal: falsos rojos en cascada.

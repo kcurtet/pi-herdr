@@ -26,6 +26,8 @@ export interface DispatchRecord {
 	status: "live" | "closed";
 	/** Flags pi que recibió el agente (skills/extensiones, spec 002). */
 	piArgs?: string[];
+	/** Comando de setup que corrió en el worktree antes del agente (spec 003). */
+	setupCommand?: string;
 }
 
 /** Subconjunto de la ExtensionAPI que el registry necesita (seam de tests). */

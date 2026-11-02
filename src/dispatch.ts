@@ -17,7 +17,8 @@ import {
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { armWatcher, type WatchEvent, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
-import { createWorktree, cleanupWorktree, type WorktreeRef } from "./worktree.ts";
+import { createWorktree, cleanupWorktree, resolveRepoRoot, type WorktreeRef } from "./worktree.ts";
+import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode, runSetup } from "./setup.ts";
 import { defaultResourceDirs, type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
@@ -34,6 +35,7 @@ export interface DispatchInput {
 	topology?: "tab" | "pane" | "workspace";
 	kind?: string;
 	worktree?: boolean;
+	setupCommand?: string;
 	keepOpen?: boolean;
 	skills?: boolean | string[];
 	extensions?: boolean | string[];
@@ -44,6 +46,8 @@ export interface DispatchResult {
 	paneId: string;
 	taskId: string;
 	worktreePath?: string;
+	/** Nota breve del setup corrido en el worktree (spec 003 D5). */
+	setupNote?: string;
 	/** El prompt inicial fue rechazado con agent_blocked (espera aprobación). */
 	initialBlocked?: boolean;
 }
@@ -126,10 +130,11 @@ export async function readAgent(deps: DispatchDeps, name: string, lines?: number
 /** Content de herdr_dispatch: estado del despacho al instante (issue #2: blocked visible). */
 export function dispatchReport(r: DispatchResult): string {
 	const base = `Despachado ${r.agent} en ${r.paneId} (task ${r.taskId}${r.worktreePath ? `, worktree ${r.worktreePath}` : ""}).`;
+	const setup = r.setupNote ? ` ${r.setupNote}.` : "";
 	if (r.initialBlocked) {
-		return `${base} ATENCIÓN: el prompt inicial fue rechazado con agent_blocked — el agente espera aprobación o input en su pane; decídelo ahí o con herdr_prompt.`;
+			return `${base}${setup} ATENCIÓN: el prompt inicial fue rechazado con agent_blocked — el agente espera aprobación o input en su pane; decídelo ahí o con herdr_prompt.`;
 	}
-	return `${base} Recibirás el resultado como evento; sigue con tu trabajo.`;
+	return `${base}${setup} Recibirás el resultado como evento; sigue con tu trabajo.`;
 }
 
 /** herdr_agents: despachos de la sesión, línea por agente. */
@@ -140,6 +145,7 @@ export function listDispatches(deps: DispatchDeps): string {
 		.map((r) => {
 			const parts = [r.agent, r.status, r.topology, `pane ${r.paneId}`, `task ${r.taskId}`];
 			if (r.worktree) parts.push(`worktree ${r.worktree.branch} (${r.worktree.dir})`);
+			if (r.setupCommand) parts.push(`setup ${r.setupCommand}`);
 			if (r.keepOpen) parts.push("keepOpen");
 			if (r.piArgs && r.piArgs.length > 0) parts.push(`pi: ${r.piArgs.join(" ")}`);
 			return parts.join(" · ");
@@ -175,6 +181,24 @@ export async function dispatch(
 	name = avoidRegistry(name, deps.registry, await liveNames(deps.run));
 	const topology = effective.topology;
 
+	// spec 003: modo de setup validado y detectado ANTES de crear nada (D1/D2:
+	// error temprano, CERO side effects). Detección sobre la RAÍZ del repo — el
+	// cwd puede ser un subdirectorio (monorepos) y el agente acaba en la raíz
+	// del worktree.
+	const setupMode = parseSetupMode(input.setupCommand, effective.worktree === true);
+	let setupCommand: string | undefined;
+	if (setupMode.kind === "auto") {
+		const repoRoot = await resolveRepoRoot(deps.run, cwd);
+		setupCommand = detectSetupCommand(repoRoot);
+		if (setupCommand === undefined) {
+			throw new Error(
+				`pi-herdr: sin lockfile conocido en ${repoRoot} (buscados: ${LOCKFILE_COMMANDS.map((c) => c.file).join(", ")}) — pasa setupCommand: "none" si no quieres setup, o el comando explícito`,
+			);
+		}
+	} else if (setupMode.kind === "literal") {
+		setupCommand = setupMode.command;
+	}
+
 	// worktree ANTES de crear topología (spec D7: error temprano, cero side effects)
 	// issue #12: se resuelve por jerarquía param > config > builtin (effective),
 	// igual que el resto de keys — no por el input crudo
@@ -183,6 +207,14 @@ export async function dispatch(
 		worktree = await createWorktree(deps.run, { repo: cwd, name });
 	}
 	const agentCwd = worktree?.dir ?? cwd;
+
+	// spec 003 D3: setup oculto en el worktree ANTES de crear topología; el
+	// fallo (abort + rollback) se cablea en la tarea 5
+	let setupNote: string | undefined;
+	if (worktree !== undefined && setupCommand !== undefined) {
+		const { elapsedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
+		setupNote = `setup OK (${setupCommand}, ${Math.round(elapsedMs / 1000)}s)`;
+	}
 
 	// topología → paneId (dónde vive el agente) + targetId (qué se cierra).
 	// issue #11: tab/pane anclan al workspace/pane de ESTA sesión (env de herdr),
@@ -231,6 +263,7 @@ export async function dispatch(
 		paneId,
 		cwd: agentCwd,
 		worktree,
+		setupCommand,
 		keepOpen: effective.keepOpen,
 		createdAt: Date.now(),
 		status: "live",
@@ -243,5 +276,5 @@ export async function dispatch(
 		name,
 		(ev) => deps.settleFor()(name, ev),
 	);
-	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, initialBlocked: promptResult === "blocked" || undefined };
+	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, setupNote, initialBlocked: promptResult === "blocked" || undefined };
 }
