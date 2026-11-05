@@ -71,6 +71,10 @@ export async function readAny(run: RunFn, target: string, lines?: number): Promi
 
 const TAIL = 40;
 
+/** Cómo debe contarlo quien recibe el aviso (pensado para orquestadoras por voz). */
+export const BRIEF_HINT =
+	"Cuéntaselo a la persona en UNA sola frase: qué agente y qué ha pasado, y si tiene que decidir algo. Sin listas ni pegar la salida; el detalle solo si te lo pide.";
+
 function tail(output: string, n = TAIL): string {
 	const lines = output.split("\n");
 	return lines.slice(Math.max(0, lines.length - n)).join("\n").trim();
@@ -132,12 +136,12 @@ export class Watches {
 	private async onEvent(target: string, label: string, ev: WatchEvent, keep: boolean): Promise<boolean> {
 		const details = { target, label, kind: ev.kind };
 		if (ev.kind === "blocked") {
-			this.deps.emit(`herdr: ${label} está bloqueado esperando una decisión en su panel (${target}).`, details);
+			this.deps.emit(`herdr: ${label} está bloqueado esperando una decisión en su panel (${target}).\n\n${BRIEF_HINT}`, details);
 			return true; // D5: blocked siempre re-arma (espera el cambio)
 		}
 		if (ev.kind === "settled") {
 			const out = tail(ev.output);
-			this.deps.emit(`herdr: ${label} ha terminado (${ev.state}).\n\nÚltima salida:\n${out}`, {
+			this.deps.emit(`herdr: ${label} ha terminado (${ev.state}).\n\n${BRIEF_HINT}\n\nÚltima salida (contexto, no para leerla entera):\n${out}`, {
 				...details,
 				state: ev.state,
 			});
@@ -146,7 +150,7 @@ export class Watches {
 		}
 		this.handles.delete(target);
 		const why = ev.kind === "gone" ? "ha desaparecido" : "ya no se puede vigilar";
-		this.deps.emit(`herdr: ${label} ${why} (${ev.reason}).`, details);
+		this.deps.emit(`herdr: ${label} ${why} (${ev.reason}).\n\n${BRIEF_HINT}`, details);
 		return false;
 	}
 }

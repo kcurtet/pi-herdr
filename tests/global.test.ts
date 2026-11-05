@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import extension from "../index.ts";
-import { formatGlobalList, scopeFrom, Watches, type GlobalAgent } from "../src/global.ts";
+import { BRIEF_HINT, formatGlobalList, scopeFrom, Watches, type GlobalAgent } from "../src/global.ts";
 import type { WaitPhase } from "../src/watch.ts";
 import { fakeRun, ok, waitFor } from "./helpers.ts";
 
@@ -68,6 +68,8 @@ describe("Watches", () => {
 		await waitFor(() => events.length === 1, "evento settled");
 		expect(events[0]!.content).toContain("pi de screeps ha terminado (idle)");
 		expect(events[0]!.content).toContain("Tests en verde.");
+		// la instrucción va ANTES de la salida: lo primero que lee el modelo es cómo contarlo
+		expect(events[0]!.content.indexOf(BRIEF_HINT)).toBeLessThan(events[0]!.content.indexOf("Tests en verde."));
 		expect(spawns.targets.every((t) => t === "w1D:p1")).toBe(true);
 		expect(calls.some((c) => c.args[1] === "close")).toBe(false);
 		expect(watches.has("w1D:p1")).toBe(false);
@@ -77,7 +79,9 @@ describe("Watches", () => {
 		const { watches, events } = setup(["blocked", "done"]);
 		await watches.watch("w1D:p1", { label: "el agente de screeps" });
 		await waitFor(() => events.length === 2, "blocked + settled");
-		expect(events[0]!.content).toBe("herdr: el agente de screeps está bloqueado esperando una decisión en su panel (w1D:p1).");
+		expect(events[0]!.content).toBe(
+			`herdr: el agente de screeps está bloqueado esperando una decisión en su panel (w1D:p1).\n\n${BRIEF_HINT}`,
+		);
 		expect(events[1]!.details.kind).toBe("settled");
 		expect(watches.has("w1D:p1")).toBe(false);
 	});
