@@ -14,6 +14,19 @@ Requiere correr dentro de herdr (`HERDR_ENV=1`).
 | `herdr_stop` | Abandona ya: cierra su tab/pane/workspace y limpia su worktree. |
 | `herdr_agents` | Lista los despachos de la sesión. |
 
+## Modo global (spec 004)
+
+Por defecto cada sesión solo ve y orquesta **sus** despachos. Con `PI_HERDR_SCOPE=global` en el entorno de la sesión (p.ej. una orquestadora como Trinity de [jerga](https://github.com/kcurtet/jerga)):
+
+| Tool | En global |
+|---|---|
+| `herdr_agents` | Despachos propios **+ todos los agentes de herdr** (pi, claude…): objetivo (nombre o `pane_id`), estado, cwd, título. |
+| `herdr_read` | Lee **cualquier** agente, por nombre o `pane_id` (`w1D:p1`). |
+| `herdr_watch` | Vigila un agente ajeno y avisa (mensaje con `triggerTurn`) cuando **termina**, **se bloquea** o **desaparece**. Un aviso por defecto; `keep: true` = cada ronda. |
+| `herdr_unwatch` | Deja de vigilar. |
+
+Los agentes ajenos son de **solo lectura + vigilancia**: nunca se cierran ni se promptean desde las tools (`herdr_prompt`/`herdr_stop` siguen limitadas a despachos propios). La variable es por sesión, no va en `pi-herdr.json`, para no cambiar el comportamiento de las demás sesiones.
+
 ## Comportamiento
 
 - **Eventos, no polling**: un watcher interno (`herdr agent wait` driven) emite `blocked`/`settled`/`gone`/`stranded` como mensajes que disparan turno cuando el agente principal está idle. El settle trae la salida del agente. `stranded` = el wait murió pero el agente SIGUE vivo (p.ej. server herdr caído/reiniciándose): nada se cierra, el despacho queda live — decide con `herdr_stop`.

@@ -30,6 +30,7 @@ import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
 import { loadDefaults, saveDefaults } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
+import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
 import { join } from "node:path";
 
 const DispatchParams = Type.Object(
@@ -64,6 +65,20 @@ const ReadParams = Type.Object(
 	{ $id: "HerdrReadParams" },
 );
 
+const WatchParams = Type.Object(
+	{
+		agent: Type.String({ description: "Agente a vigilar: nombre o pane_id (p.ej. w1D:p1), tal como sale en herdr_agents." }),
+		keep: Type.Optional(Type.Boolean({ description: "Seguir vigilando tras el primer 'terminado' (avisar cada ronda). Default false: un aviso y fin." })),
+		label: Type.Optional(Type.String({ description: "Cómo llamarlo en los avisos (p.ej. 'el agente de screeps'). Default: kind + carpeta." })),
+	},
+	{ $id: "HerdrWatchParams" },
+);
+
+const UnwatchParams = Type.Object(
+	{ agent: Type.String({ description: "Agente vigilado (nombre o pane_id)." }) },
+	{ $id: "HerdrUnwatchParams" },
+);
+
 const StopParams = Type.Object(
 	{
 		agent: Type.String({ description: "Nombre del despacho a abandonar." }),
@@ -85,6 +100,8 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	};
 
 	const resourceDirs = defaultResourceDirs(process.env);
+	// spec 004 D1: scope por sesión (env), no por config compartida
+	const scope = scopeFrom(process.env);
 
 	// config ilegible/claves inválidas: aviso visible UNA vez al arrancar.
 	// FUERA del cuerpo de la factory: los action methods (sendMessage) son
@@ -123,6 +140,14 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 		...inject,
 	};
+
+	// spec 004: vigilancias de agentes ajenos (solo global). Informan, nunca cierran (D4).
+	const watches = new Watches({
+		run,
+		spawnWait: deps.spawnWait,
+		emit: (content, details) =>
+			pi.sendMessage({ customType: "herdr-watch-event", content, display: true, details }, { triggerTurn: true }),
+	});
 
 	pi.registerTool({
 		name: "herdr_dispatch",
@@ -165,7 +190,10 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	pi.registerTool({
 		name: "herdr_read",
 		label: "Herdr Read",
-		description: "Lee la salida terminal de un agente despachado (recent-unwrapped).",
+		description:
+			scope === "global"
+				? "Lee la salida terminal de CUALQUIER agente de herdr (nombre o pane_id como w1D:p1), despachado o no (recent-unwrapped)."
+				: "Lee la salida terminal de un agente despachado (recent-unwrapped).",
 		parameters: ReadParams,
 		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
 		execute: async (_id, params) => {
@@ -189,14 +217,57 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	pi.registerTool({
 		name: "herdr_agents",
 		label: "Herdr Agents",
-		description: "Lista los despachos de esta sesión (agente, estado, topología, worktree).",
+		description:
+			scope === "global"
+				? "Lista los despachos de esta sesión Y todos los agentes de herdr agrupados por proyecto (workspace): orquestador de cada uno, sus trabajadores y lo bloqueado primero, con objetivo (nombre o pane_id), estado, cwd y título."
+				: "Lista los despachos de esta sesión (agente, estado, topología, worktree).",
 		parameters: Type.Object({}, { $id: "HerdrAgentsParams" }),
 		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
 		execute: async () => {
-			const text = listDispatches(deps);
-			return { content: [{ type: "text", text }], details: { count: registry.list().length } };
+			let text = listDispatches(deps);
+			if (scope === "global") {
+				const [agents, workspaces] = await Promise.all([listGlobal(run), listWorkspaces(run)]);
+				const projects = groupByProject(agents, workspaces, process.env.HERDR_PANE_ID);
+				text += `\n\nAgentes de herdr por proyecto (orquestador = sin nombre, lo lanzó la persona; trabajadores = con nombre):\n${formatByProject(projects)}`;
+				const watched = watches.list();
+				if (watched.length > 0) text += `\n\nVigilando: ${watched.join(", ")}`;
+			}
+			return { content: [{ type: "text", text }], details: { count: registry.list().length, scope } };
 		},
 	});
+
+	if (scope === "global") {
+		pi.registerTool({
+			name: "herdr_watch",
+			label: "Herdr Watch",
+			description:
+				"Vigila un agente de herdr que NO despachaste (nombre o pane_id) y avisa como mensaje cuando termine, se bloquee o desaparezca. " +
+				"No lo cierra ni lo toca. Un aviso por defecto (keep:true = cada ronda).",
+			promptSnippet: "vigilar un agente ajeno de herdr y ser avisado cuando termine o se bloquee",
+			promptGuidelines: [
+				"Úsalo cuando te pidan 'avísame cuando termine X'. No hagas polling ni duermas: el aviso llega solo.",
+				"El objetivo es el nombre o el pane_id que muestra herdr_agents.",
+			],
+			parameters: WatchParams,
+			annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+			execute: async (_id, params) => {
+				const text = await watches.watch(params.agent, { keep: params.keep, label: params.label });
+				return { content: [{ type: "text", text }], details: { agent: params.agent } };
+			},
+		});
+
+		pi.registerTool({
+			name: "herdr_unwatch",
+			label: "Herdr Unwatch",
+			description: "Deja de vigilar un agente (herdr_watch).",
+			parameters: UnwatchParams,
+			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+			execute: async (_id, params) => {
+				const text = watches.unwatch(params.agent);
+				return { content: [{ type: "text", text }], details: { agent: params.agent } };
+			},
+		});
+	}
 
 	// Resume/crash: reconstruir desde la rama activa y reconciliar contra herdr
 	pi.on("session_start", async (_event, ctx) => {
@@ -234,6 +305,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	});
 
 	pi.on("session_shutdown", async () => {
+		watches.stopAll(); // spec 004 A6
 		await shutdownCleanup({ run, registry, cleanupWorktree });
 	});
 
