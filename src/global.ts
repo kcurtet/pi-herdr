@@ -20,6 +20,8 @@ export interface GlobalAgent {
 	agent?: string;
 	agent_status?: string;
 	pane_id: string;
+	workspace_id?: string;
+	tab_id?: string;
 	cwd?: string;
 	terminal_title_stripped?: string;
 	terminal_title?: string;
@@ -53,6 +55,96 @@ export function formatGlobalList(agents: GlobalAgent[], home = process.env.HOME)
 			return `- ${parts.join(" · ")}`;
 		})
 		.join("\n");
+}
+
+export interface Workspace {
+	workspace_id: string;
+	label?: string;
+}
+
+export interface Project {
+	id: string;
+	label: string;
+	/** Agentes SIN nombre: los lanzó la persona → orquestador(es) del proyecto. */
+	leads: GlobalAgent[];
+	/** Agentes CON nombre: despachados por el orquestador (implementadores, reviewers…). */
+	workers: GlobalAgent[];
+	blocked: number;
+	/** La sesión que pregunta vive en este workspace (p.ej. Trinity en el suyo). */
+	self: boolean;
+}
+
+/**
+ * Agrupa por workspace (= proyecto). Orquestador = agente sin nombre (lo lanzó la persona);
+ * trabajadores = agentes con nombre (los despacha pi-herdr). Lo bloqueado primero.
+ */
+export function groupByProject(agents: GlobalAgent[], workspaces: Workspace[], selfPane?: string): Project[] {
+	const labels = new Map(workspaces.map((w) => [w.workspace_id, w.label || w.workspace_id]));
+	const byWs = new Map<string, Project>();
+	for (const a of agents) {
+		const id = a.workspace_id ?? a.pane_id.split(":")[0] ?? "?";
+		let p = byWs.get(id);
+		if (!p) {
+			p = { id, label: labels.get(id) ?? id, leads: [], workers: [], blocked: 0, self: false };
+			byWs.set(id, p);
+		}
+		(a.name ? p.workers : p.leads).push(a);
+		if (a.agent_status === "blocked") p.blocked++;
+		if (selfPane && a.pane_id === selfPane) p.self = true;
+	}
+	// orden: bloqueados primero, luego los que trabajan, luego el resto; el propio al final
+	const rank = (p: Project) =>
+		p.self ? 3 : p.blocked > 0 ? 0 : [...p.leads, ...p.workers].some((a) => a.agent_status === "working") ? 1 : 2;
+	return [...byWs.values()].sort((x, y) => rank(x) - rank(y) || x.label.localeCompare(y.label));
+}
+
+function agentLine(a: GlobalAgent, home: string | undefined): string {
+	const title = (a.terminal_title_stripped ?? a.terminal_title ?? "").trim();
+	const parts = [targetOf(a), a.agent ?? "?", a.agent_status ?? "unknown", shortCwd(a.cwd, home)];
+	if (title) parts.push(`"${title}"`);
+	if (a.focused) parts.push("(enfocado)");
+	return parts.join(" · ");
+}
+
+/** herdr_agents en modo global: un bloque por proyecto, orquestador y trabajadores. */
+export function formatByProject(projects: Project[], home = process.env.HOME): string {
+	if (projects.length === 0) return "No hay agentes en herdr.";
+	const out: string[] = [];
+	let blocked = 0;
+	let busy = 0;
+	for (const p of projects) {
+		if (!p.self) blocked += p.blocked;
+		const tag = p.self ? " (tu propio workspace)" : p.blocked ? ` ⚠ ${p.blocked} bloqueado(s)` : "";
+		out.push(`## ${p.label} [${p.id}]${tag}`);
+		if (p.leads.length === 0) {
+			out.push("  orquestador: ninguno (solo trabajadores sueltos)");
+		} else if (p.leads.length === 1) {
+			out.push(`  orquestador: ${agentLine(p.leads[0]!, home)}`);
+		} else {
+			out.push(`  orquestadores (${p.leads.length}, ¿se pisan?):`);
+			for (const a of p.leads) out.push(`    - ${agentLine(a, home)}`);
+		}
+		if (p.workers.length > 0) {
+			const working = p.workers.filter((a) => a.agent_status === "working").length;
+			if (!p.self) busy += working; // la propia sesión no cuenta en el repaso
+			const wb = p.workers.filter((a) => a.agent_status === "blocked").length;
+			out.push(`  trabajadores: ${p.workers.length} (${working} trabajando${wb ? `, ${wb} bloqueado(s)` : ""})`);
+			for (const a of p.workers) out.push(`    - ${agentLine(a, home)}`);
+		}
+	}
+	const n = projects.filter((p) => !p.self).length;
+	out.push("", `Resumen: ${n} proyecto(s) · ${busy} trabajador(es) trabajando · ${blocked} bloqueado(s)`);
+	return out.join("\n");
+}
+
+export async function listWorkspaces(run: RunFn): Promise<Workspace[]> {
+	const r = await run("herdr", ["workspace", "list"]);
+	if (r.code !== 0) return [];
+	try {
+		return (JSON.parse(r.stdout) as { result?: { workspaces?: Workspace[] } }).result?.workspaces ?? [];
+	} catch {
+		return [];
+	}
 }
 
 export async function listGlobal(run: RunFn): Promise<GlobalAgent[]> {

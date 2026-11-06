@@ -1,7 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import extension from "../index.ts";
-import { BRIEF_HINT, formatGlobalList, scopeFrom, Watches, type GlobalAgent } from "../src/global.ts";
+import {
+	BRIEF_HINT,
+	formatByProject,
+	formatGlobalList,
+	groupByProject,
+	scopeFrom,
+	Watches,
+	type GlobalAgent,
+} from "../src/global.ts";
 import type { WaitPhase } from "../src/watch.ts";
 import { fakeRun, ok, waitFor } from "./helpers.ts";
 
@@ -27,7 +35,14 @@ function waitSeq(states: string[], spawns: { n: number; targets: string[] }) {
 	};
 }
 
+const WORKSPACES = [
+	{ workspace_id: "w1D", label: "screeps" },
+	{ workspace_id: "w23", label: "jerga" },
+	{ workspace_id: "w25", label: "trinity" },
+];
+
 const routes = {
+	"workspace list": ok(JSON.stringify({ result: { workspaces: WORKSPACES } })),
 	"agent list": ok(listJson),
 	"agent read": ok("línea 1\nlínea 2\nTests en verde."),
 };
@@ -184,7 +199,47 @@ describe("index en modo global (A1/A2)", () => {
 		const tools = load("global");
 		expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["herdr_watch", "herdr_unwatch"]));
 		const out = await tools.find((t) => t.name === "herdr_agents")!.execute!("1", {});
-		expect(out.content[0]!.text).toContain("Todos los agentes de herdr:");
-		expect(out.content[0]!.text).toContain("w1D:p1 · pi · working");
+		expect(out.content[0]!.text).toContain("Agentes de herdr por proyecto");
+		expect(out.content[0]!.text).toContain("## screeps [w1D]");
+		expect(out.content[0]!.text).toContain("orquestador: w1D:p1 · pi · working");
+	});
+});
+
+
+describe("groupByProject / formatByProject (orquestar orquestadores)", () => {
+	const ag = (o: Partial<GlobalAgent> & { pane_id: string }): GlobalAgent => ({ agent: "pi", agent_status: "idle", ...o });
+	const agents: GlobalAgent[] = [
+		ag({ pane_id: "w1D:p1", workspace_id: "w1D", cwd: "/home/u/dev/screeps" }),
+		ag({ pane_id: "w1D:p2", workspace_id: "w1D", name: "impl-minerales", agent_status: "working" }),
+		ag({ pane_id: "w1D:p3", workspace_id: "w1D", name: "review-029", agent_status: "blocked" }),
+		ag({ pane_id: "w23:p1", workspace_id: "w23", agent: "claude", agent_status: "working" }),
+		ag({ pane_id: "w23:p2", workspace_id: "w23" }),
+		ag({ pane_id: "w25:p1", workspace_id: "w25", name: "trinity", agent_status: "working" }),
+	];
+
+	it("orquestador = sin nombre, trabajadores = con nombre; bloqueados primero; el propio al final", () => {
+		const ps = groupByProject(agents, WORKSPACES, "w25:p1");
+		expect(ps.map((p) => p.label)).toEqual(["screeps", "jerga", "trinity"]);
+		const screeps = ps[0]!;
+		expect(screeps.leads.map((a) => a.pane_id)).toEqual(["w1D:p1"]);
+		expect(screeps.workers.map((a) => a.name)).toEqual(["impl-minerales", "review-029"]);
+		expect(screeps.blocked).toBe(1);
+		expect(ps[2]!.self).toBe(true);
+	});
+
+	it("formato: bloque por proyecto, aviso de dos orquestadores y resumen", () => {
+		const out = formatByProject(groupByProject(agents, WORKSPACES, "w25:p1"), "/home/u");
+		expect(out).toContain("## screeps [w1D] ⚠ 1 bloqueado(s)");
+		expect(out).toContain("  orquestador: w1D:p1 · pi · idle · ~/dev/screeps");
+		expect(out).toContain("  trabajadores: 2 (1 trabajando, 1 bloqueado(s))");
+		expect(out).toContain("  orquestadores (2, ¿se pisan?):");
+		expect(out).toContain("## trinity [w25] (tu propio workspace)");
+		expect(out).toContain("Resumen: 2 proyecto(s) · 1 trabajador(es) trabajando · 1 bloqueado(s)");
+	});
+
+	it("workspace sin etiqueta o desconocido: usa el id", () => {
+		const ps = groupByProject([ag({ pane_id: "w9:p1" })], []);
+		expect(ps[0]!.label).toBe("w9");
+		expect(formatByProject([])).toBe("No hay agentes en herdr.");
 	});
 });

@@ -30,7 +30,7 @@ import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
 import { loadDefaults, saveDefaults } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
-import { formatGlobalList, listGlobal, scopeFrom, Watches } from "./src/global.ts";
+import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
 import { join } from "node:path";
 
 const DispatchParams = Type.Object(
@@ -219,14 +219,16 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		label: "Herdr Agents",
 		description:
 			scope === "global"
-				? "Lista los despachos de esta sesión Y todos los agentes vivos de herdr (pi, claude…), con objetivo (nombre o pane_id), estado, cwd y título."
+				? "Lista los despachos de esta sesión Y todos los agentes de herdr agrupados por proyecto (workspace): orquestador de cada uno, sus trabajadores y lo bloqueado primero, con objetivo (nombre o pane_id), estado, cwd y título."
 				: "Lista los despachos de esta sesión (agente, estado, topología, worktree).",
 		parameters: Type.Object({}, { $id: "HerdrAgentsParams" }),
 		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
 		execute: async () => {
 			let text = listDispatches(deps);
 			if (scope === "global") {
-				text += `\n\nTodos los agentes de herdr:\n${formatGlobalList(await listGlobal(run))}`;
+				const [agents, workspaces] = await Promise.all([listGlobal(run), listWorkspaces(run)]);
+				const projects = groupByProject(agents, workspaces, process.env.HERDR_PANE_ID);
+				text += `\n\nAgentes de herdr por proyecto (orquestador = sin nombre, lo lanzó la persona; trabajadores = con nombre):\n${formatByProject(projects)}`;
 				const watched = watches.list();
 				if (watched.length > 0) text += `\n\nVigilando: ${watched.join(", ")}`;
 			}
