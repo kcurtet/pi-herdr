@@ -179,8 +179,12 @@ export async function dispatch(
 			`pi-herdr: skills/extensions solo aplican a kind "pi" (pedido: "${effective.kind}"). Quita esos params o usa kind pi.`,
 		);
 	}
-	// los flags son de la CLI de pi: jamás fluyen a otros kinds (D4)
-	const piArgs = effective.kind === "pi" ? buildPiArgs(effective, deps.resourceDirs) : [];
+	// los flags son de la CLI de pi: jamás fluyen a otros kinds (D4).
+	// spec 005 D2b: con dagr activo, los hijos heredan pi-herdr auto-exento.
+	const piArgs =
+		effective.kind === "pi"
+			? buildPiArgs(effective, deps.resourceDirs, deps.dagr?.childrenExempt ? { exemptExtensions: ["pi-herdr"] } : {})
+			: [];
 
 	const cwd = input.cwd ?? deps.cwd;
 	let name = await resolveName(deps.run, task, input.name);

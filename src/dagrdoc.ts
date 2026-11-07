@@ -67,11 +67,21 @@ export interface DagrLineage {
 	pane?: string;
 }
 
+export interface DagrProject {
+	id: string;
+	title: string;
+	parent?: string;
+	owner?: string;
+	note?: string;
+}
+
 export interface DagrDoc {
 	dagr: 3;
 	run: { id: string; title: string; started_at: string };
 	generated_at: string;
 	lineage?: DagrLineage;
+	/** Solo el composed los materializa; el run de una sesión no los necesita. */
+	projects?: DagrProject[];
 	tasks: DagrTask[];
 	events: DagrEvent[];
 }

@@ -31,7 +31,9 @@ import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resourc
 import { loadDefaults, saveDefaults } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
 import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
-import { join } from "node:path";
+import { DagrRecorder, NO_DAGR, stateDirOf, type DagrHook } from "./src/dagr.ts";
+import { composeFrom, fsComposeIO } from "./src/dagrcompose.ts";
+import { basename, join } from "node:path";
 
 const DispatchParams = Type.Object(
 	{
@@ -78,6 +80,18 @@ const UnwatchParams = Type.Object(
 	{ agent: Type.String({ description: "Agente vigilado (nombre o pane_id)." }) },
 	{ $id: "HerdrUnwatchParams" },
 );
+
+/** Label del workspace de la sesión para el dir del run dagr (fallback: id/default). */
+async function workspaceLabelOf(run: typeof localRun): Promise<string> {
+	const wsId = process.env.HERDR_WORKSPACE_ID;
+	if (!wsId) return "default";
+	try {
+		const wss = await listWorkspaces(run);
+		return wss.find((w) => w.workspace_id === wsId)?.label || wsId;
+	} catch {
+		return wsId;
+	}
+}
 
 const StopParams = Type.Object(
 	{
@@ -128,6 +142,26 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	// fluye por todo el factory (dispatch, settle, stop, shutdown) para que la
 	// inyección sea coherente; `registry` inyectado fluiría también a reconcile
 	// (session_start) — hoy ningún test lo inyecta (rev #9, nit).
+	// spec 005: hook del grabado dagr — delega en el recorder si session_start lo
+	// activó; si no, NO_DAGR no-op (tools idénticas, A5). El objeto es estable
+	// para que deps/settle/reconcise lo capturen antes del init.
+	let recorder: DagrRecorder | undefined;
+	const dagrBox: { inner: DagrHook } = { inner: NO_DAGR };
+	const dagrHook: DagrHook = {
+		reserve: (a) => dagrBox.inner.reserve(a),
+		born: (o) => dagrBox.inner.born(o),
+		release: (a) => dagrBox.inner.release(a),
+		get childrenExempt() {
+			return dagrBox.inner.childrenExempt;
+		},
+		prompt: (a, n) => dagrBox.inner.prompt(a, n),
+		blocked: (a) => dagrBox.inner.blocked(a),
+		settled: (a, s) => dagrBox.inner.settled(a, s),
+		gone: (a, r) => dagrBox.inner.gone(a, r),
+		canceled: (a, r) => dagrBox.inner.canceled(a, r),
+		note: (a, d) => dagrBox.inner.note(a, d),
+	};
+
 	const run = inject?.run ?? localRun;
 	const deps: DispatchDeps = {
 		run,
@@ -135,18 +169,38 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		cwd: process.cwd(),
 		spawnWait: herdrWaitSpawn,
 		arm: armTracked,
-		settleFor: () => trackedSettle(makeSettleHandler({ run, registry, emit, cleanupWorktree }), watchers),
+		settleFor: () => trackedSettle(makeSettleHandler({ run, registry, emit, cleanupWorktree, dagr: dagrHook }), watchers),
 		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
+		dagr: dagrHook,
 		...inject,
 	};
 
 	// spec 004: vigilancias de agentes ajenos (solo global). Informan, nunca cierran (D4).
+	// spec 005 D1: los avisos SOBRE despachos propios alimentan el grafo (D0).
 	const watches = new Watches({
 		run,
 		spawnWait: deps.spawnWait,
 		emit: (content, details) =>
 			pi.sendMessage({ customType: "herdr-watch-event", content, display: true, details }, { triggerTurn: true }),
+		onOwnEvent: (target, ev) => {
+			const rec = registry.get(target) ?? registry.list().find((r) => r.paneId === target);
+			if (!rec) return; // agente ajeno: el grafo no se contamina (v1)
+			switch (ev.kind) {
+				case "blocked":
+					dagrHook.blocked(rec.agent);
+					break;
+				case "settled":
+					dagrHook.settled(rec.agent, ev.state);
+					break;
+				case "gone":
+					dagrHook.gone(rec.agent, ev.reason);
+					break;
+				case "stranded":
+					dagrHook.note(rec.agent, `stranded — ${ev.reason}`);
+					break;
+			}
+		},
 	});
 
 	pi.registerTool({
@@ -209,7 +263,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		parameters: StopParams,
 		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 		execute: async (_id, params) => {
-			const text = await stopDispatch({ run, registry, cleanupWorktree, watchers }, params.agent);
+			const text = await stopDispatch({ run, registry, cleanupWorktree, watchers, dagr: dagrHook }, params.agent);
 			return { content: [{ type: "text", text }], details: { agent: params.agent } };
 		},
 	});
@@ -270,7 +324,40 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	}
 
 	// Resume/crash: reconstruir desde la rama activa y reconciliar contra herdr
+	// spec 005: ANTES de reconcile, el recorder dagr (si toca) — así los gone de
+	// reconcile quedan grabados. Init jamás rompe la sesión (catch-all).
 	pi.on("session_start", async (_event, ctx) => {
+		try {
+			const { dagr } = loadDefaults(configPath);
+						if (dagr.enabled && process.env.HERDR_ENV === "1") {
+				let sessionId: string | undefined;
+				try {
+					sessionId = ctx?.sessionManager?.getSessionId?.();
+				} catch {
+					sessionId = undefined;
+				}
+				sessionId ??= process.env.PI_SESSION_ID;
+				if (sessionId) {
+					const stateDir = process.env.PI_HERDR_DAGR_STATE_DIR ?? stateDirOf(process.env.HOME ?? "/home/user");
+					const label = await workspaceLabelOf(run);
+					recorder = await DagrRecorder.init({
+						sessionId,
+						workspaceLabel: label,
+						cwdTitle: basename(process.cwd()),
+						env: process.env,
+						children: dagr.children,
+						deps: {
+							stateDir,
+							compose: (rp) => composeFrom(fsComposeIO(stateDir), rp),
+						},
+					});
+					dagrBox.inner = recorder;
+									}
+			}
+		} catch (err) {
+			
+			// el grafo jamás tumba la sesión (restricción spec 005)
+		}
 		const liveRestored: string[] = [];
 		try {
 			const branch = ctx.sessionManager.getBranch() as unknown[];
@@ -280,7 +367,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 				if (rec.status === "live") liveRestored.push(rec.agent);
 			}
 			if (restored.list().length > 0) {
-				const reArmed = await reconcile({ ...deps, emit, cleanupWorktree });
+				const reArmed = await reconcile({ ...deps, emit, cleanupWorktree, dagr: dagrHook });
 				if (reArmed.length > 0) {
 					emit(`pi-herdr: vigilancia re-armada tras resume para ${reArmed.join(", ")}`, {
 						customType: "herdr-dispatch-event",
@@ -306,7 +393,8 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 
 	pi.on("session_shutdown", async () => {
 		watches.stopAll(); // spec 004 A6
-		await shutdownCleanup({ run, registry, cleanupWorktree });
+		await shutdownCleanup({ run, registry, cleanupWorktree, dagr: dagrHook });
+		await recorder?.flush(); // spec 005: drena la cola de writes del grafo
 	});
 
 	// /herdr — defaults configurables (spec 002 D6)
