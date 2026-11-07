@@ -8,36 +8,43 @@
  * el scrollback con contenido real entre medias, así que el filtrado es por
  * línea con contexto local — no "recortar de la marca al final".
  *
- * Para quien consume la lectura (orquestador, eventos settle, tools) esto es
- * ruido; aquí se recorta antes de devolver la salida.
+ * Anti falsos positivos (review 140b31a): una línea de statusline real siempre
+ * acumula varias señales (↑↓ + %/ctx + $ + modo), mientras que la prosa que
+ * parece statusline (`142/150 (94.7%)`, `$12.34 sin IVA`, `↑2 ↓1`) solo tiene
+ * una. Por eso una MARCA exige ≥2 señales en la misma línea, y las líneas
+ * débiles solo cuentan como chrome con una marca (no una regla: las reglas
+ * pueden ser contenido) a ≤3 líneas. Sin testigos incondicionales por posición:
+ * el mensaje final del agente vive justo al final del snapshot.
  *
  * Deliberadamente NO se toca el borde derecho `│` de las líneas de contenido
  * ni las tablas de caja (`├──┤`): distinguir borde de tabla real es frágil.
+ * Tampoco se preservan blancos múltiples dentro de bloques de código citado
+ * ni los hard breaks de markdown (dos espacios finales): en un snapshot de
+ * terminal ese whitespace es padding en el 99% de los casos.
  */
 
-/** Línea-regla: ≥2 separadores de caja repetidos, con borde derecho opcional. */
-const RULE = /^(?:[─━═]{2,})\s*│?$/;
+/** Línea-regla: separadores de caja repetidos, con borde derecho opcional. */
+const RULE = /^(?:[─━═]+)\s*│?$/;
 
-/** Marcas fuertes del statusline de pi: uso de contexto, contadores ↑↓,
- * ratio ctx (38.0%) o coste $ — cubre el statusline por defecto y los custom. */
-const STATUS_MARK =
-	/[\d.]+%\s*\/\s*[\d.]+[KMG]?\s*\(auto\)|↑\S+\s+↓\S+|[\d.]+[kKM]?\/[\d.]+[KM]?\s*\(\d+(?:\.\d+)?%\)|\$\d+\.\d\d\b/;
-
-/** Líneas débiles que solo cuentan como chrome junto a una regla/marca:
- * prompt de input, cwd (branch), hint de mensajes nuevos. */
-const STATUS_SIDE = [
-	/^~\s*•\s*\S+/,
-	/^~?\S*\s+\([^\s()]+\)\s*$/,
-	/^↓\s*Jump to latest message/,
+/** Señales del statusline de pi; una línea es MARCA con ≥2 en la misma línea. */
+const SIGNALS: RegExp[] = [
+	/\d+(?:\.\d+)?%\s*\/\s*[\d.]+[KM]?\s*\(auto\)/, // 4.8%/1.0M (auto)
+	/[\d.]+[kKM]?\s*\/\s*[\d.]+[KM]?\s*\(\d+(?:\.\d+)?%\)/, // 380k/1.0M (38.0%)
+	/↑\d+[kKM]\s+↓\d+[kKM]/, // ↑44k ↓19k (con unidad; un diffstat ↑2 ↓1 no llega a 2 señales)
+	/\$\d+(?:\.\d+)?\b/, // $0.318 / $22.37
+	/━{2,}─{2,}/, // barra de progreso ━━━─────
+	/[•·]\s*(?:high|medium|low|auto|thinking)\b/, // glm-5.3 • high
 ];
 
-/** Radio (líneas) en el que buscar regla o marca fuerte que avale el chrome. */
+/** Radio (líneas) en el que buscar una marca que avale el chrome. */
 const CHROME_RADIUS = 3;
-/** Tamaño del borde inferior de captura donde el chrome no necesita testigo. */
-const TAIL_EDGE = 4;
 
-/** Palabra única corta: resto envuelto del statusline (p.ej. `high`). */
-const STATUS_WRAPPED = /^\S{1,8}$/;
+/** Spinner de actividad de pi: carácter braille de spinner + run de regla. */
+const SPINNER = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+
+function isSpinner(line: string): boolean {
+	return SPINNER.test(line) && /[─━═]{4,}/.test(line);
+}
 
 function isBlankLine(line: string): boolean {
 	const t = line.trim();
@@ -49,42 +56,54 @@ function isRule(line: string): boolean {
 	return RULE.test(line.trim());
 }
 
+/** Línea de statusline: ≥2 señales acumuladas (ver cabecera). */
 function isStatusMark(line: string): boolean {
-	return STATUS_MARK.test(line);
+	return SIGNALS.filter((p) => p.test(line)).length >= 2;
 }
 
+/** Líneas débiles: solo cuentan como chrome junto a una marca cercana.
+ * Prompt de input, cwd (branch), hint de mensajes nuevos y fragmentos
+ * envueltos del propio statusline (provider/modelo sin señales completas). */
 function isStatusSide(line: string): boolean {
-	return STATUS_SIDE.some((p) => p.test(line.trim()));
+	const t = line.trim();
+	return (
+		/^~\s*•\s*\S+/.test(t) ||
+		/^~?\S*\s+\([^\s()]+\)\s*$/.test(t) ||
+		/^↓\s*Jump to latest message/.test(t) ||
+		/^\([a-z0-9][a-z0-9.-]*\)\s*\S+/.test(t) ||
+		/[•·]$/.test(t)
+	);
 }
 
-/** ¿Hay una regla o marca fuerte cerca (excluida la propia línea)? También
- * vale estar en el borde inferior: el statusline vive al final del snapshot. */
-function chromeWitness(lines: string[], i: number): boolean {
-	if (i >= lines.length - TAIL_EDGE) return true;
+/** ¿Hay una marca (no regla) a ≤CHROME_RADIUS líneas, excluida la propia? */
+function markNearby(lines: string[], i: number): boolean {
 	for (let j = Math.max(0, i - CHROME_RADIUS); j <= Math.min(lines.length - 1, i + CHROME_RADIUS); j++) {
-		if (j !== i && (isRule(lines[j]) || isStatusMark(lines[j]))) return true;
+		if (j !== i && isStatusMark(lines[j])) return true;
 	}
 	return false;
 }
 
-/** Snapshot limpio: sin reglas, sin statusline (con testigo local), sin
- * prompts de input, blancos colapsados a un máximo de uno. */
+/** Snapshot limpio: sin reglas, sin statusline (marca ≥2 señales o línea débil
+ * con marca cerca), sin prompts de input, blancos colapsados a un máximo de
+ * uno. */
 export function cleanAgentRead(raw: string): string {
 	const lines = raw.replace(/\r\n/g, "\n").split("\n");
 	const kept: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
-		if (isRule(line)) continue;
+		if (isRule(line) || isSpinner(line)) continue;
 		if (isBlankLine(line)) {
 			if (kept.length === 0 || isBlankLine(kept[kept.length - 1])) continue;
 			kept.push("");
 			continue;
 		}
-		const looksChrome = isStatusMark(line) || isStatusSide(line) || line.trim() === ">";
-		if (looksChrome && chromeWitness(lines, i)) continue;
+		if (isStatusMark(line)) continue;
+		if (isStatusSide(line) && markNearby(lines, i)) continue;
+		if (line.trim() === ">" && markNearby(lines, i)) continue;
 		// resto envuelto del statusline: palabra corta justo debajo de una marca
-		const wrappedTail = STATUS_WRAPPED.test(line.trim()) && (isStatusMark(lines[i - 1] ?? "") || isStatusMark(lines[i - 2] ?? ""));
-		if (wrappedTail) continue;
+		if (/^\S{1,8}$/.test(line.trim()) && [i - 1, i - 2, i - 3].some((j) => isStatusMark(lines[j] ?? ""))) {
+			continue;
+		}
 		kept.push(line.replace(/[ \t]+$/, ""));
 	}
 	while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();

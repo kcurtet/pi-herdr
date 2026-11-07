@@ -86,6 +86,63 @@ describe("cleanAgentRead", () => {
 		expect(cleanAgentRead(raw)).toBe("resumen final\nhigh");
 	});
 
+	it("prosa con dinero sobrevive: una señal no es statusline (review 140b31a)", () => {
+		const raw = "resumen del trabajo\ncoste total de la sesion: $12.34 sin IVA";
+		expect(cleanAgentRead(raw)).toBe("resumen del trabajo\ncoste total de la sesion: $12.34 sin IVA");
+	});
+
+	it("reporte de suite con ratio (94.7%) sobrevive", () => {
+		const raw = "suite verde:\n142/150 (94.7%) tests pasan hoy";
+		expect(cleanAgentRead(raw)).toBe("suite verde:\n142/150 (94.7%) tests pasan hoy");
+	});
+
+	it("diffstat ↑2 ↓1 sobrevive (una señal, sin unidad k)", () => {
+		const raw = "summary\nfiles ↑2 ↓1 changed\ndone";
+		expect(cleanAgentRead(raw)).toBe("summary\nfiles ↑2 ↓1 changed\ndone");
+	});
+
+	it("línea débil tipo 'docs (updated)' sobrevive sin marca cercana, también al final", () => {
+		const raw = "cambios:\ndocs (updated)";
+		expect(cleanAgentRead(raw)).toBe("cambios:\ndocs (updated)");
+	});
+
+	it("cadena de falsos positivos no se propaga: $1.99 no arrastra líneas cortas", () => {
+		const raw = "gasto $1.99\ntotal\nseguimos";
+		expect(cleanAgentRead(raw)).toBe("gasto $1.99\ntotal\nseguimos");
+	});
+
+	it("statusline con coste de 3 decimales ($0.318) y fragmentos envueltos cae entero", () => {
+		const raw = [
+			" resultado final del trabajo",
+			"",
+			` ${RULE_WIDE}`,
+			" ──",
+			" ↑44k ↓19k R655k CH98.3% $0.318 4.8%/1.0M (auto)",
+			" (zai-coding-cn) glm-5.3 •",
+			" high",
+		].join("\n");
+		expect(cleanAgentRead(raw)).toBe(" resultado final del trabajo");
+	});
+
+	it("resto envuelto de un solo ─ también cae", () => {
+		const raw = "intro\n ─\ncoda";
+		expect(cleanAgentRead(raw)).toBe("intro\ncoda");
+	});
+
+	it("línea de spinner de actividad (── ⠴ Working ────) cae", () => {
+		const raw = [
+			"trabajando en ello, dame un momento",
+			"",
+			"── ⠴ Working " + "─".repeat(96),
+		].join("\n");
+		expect(cleanAgentRead(raw)).toBe("trabajando en ello, dame un momento");
+	});
+
+	it("braille en contenido sin run de regla sobrevive", () => {
+		const raw = "⠿ DNS over HTTPS — qué es y cuándo usarlo";
+		expect(cleanAgentRead(raw)).toBe("⠿ DNS over HTTPS — qué es y cuándo usarlo");
+	});
+
 	it("statusline custom con iconos, ratio (38.0%), coste y barra de progreso", () => {
 		const raw = [
 			"",
