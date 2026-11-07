@@ -26,3 +26,13 @@ Task 7 (compositor+wiring): complete — commits cece575 + 808ab79 (15 tests, 35
 
 - Doble commit rojo por pipes que enmascaraban exit codes (amend en ambos; lección anotada: checkear exit explícito).
 
+
+## Revisión final (contexto fresco, pi -p)
+
+- Veredicto inicial: NO-MERGE con 1 BLOCKER + 3 menores + 4 nits.
+- **F1 (BLOCKER)**: sessPrefix tomaba la CABEZA de los uuidv7 (= timestamp puro; hermanos nacidos a segundos colisionan con P≈1−δ/4s) → composed con project/task ids duplicados (E104/E110) publicado en silencio. Fix: COLA del uuid (aleatoria) + dedupPrefix (bump -2) en el composer como red. Verificado en vivo: dos hijos uuidv7 reales seguidos → prefijos distintos, sin colisiones, strict ✓. Tests: 2 de regresión.
+- F2: /herdr status imprimía el bloque de defaults DOS veces (edit mal aplicado) → corregido.
+- F3: ciclo A↔B duplicaba a la raíz bajo el hijo sin warn → done incluye la raíz + warn de ciclo. Test de regresión.
+- F4: formato roto en session_start de index.ts. F5: setup duplicado en global.test.ts. F6: pane persiste en el task (campo no-contratado tolerado, probeado) para locator de intentos a2+. F7: release solo libera la ÚLTIMA reserva. F8: tmp limpio si el rename falla (dagrBinCache negativo permanente y coste O(sesiones)/write quedan como decisiones documentadas del plan).
+- Fix pass: 359/359 + tsc 0 (commit 6c3657a). Re-smoke E2E real tras el fix: hijos uuidv7 sin colisión, composed strict ✓.
+- Veredicto tras fixes: MERGE (el reviewer condicionó el merge a F1+F2; el resto eran menores/nits y también se corrigieron).
