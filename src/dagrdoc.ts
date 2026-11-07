@@ -42,6 +42,9 @@ export interface DagrTask {
 	title: string;
 	kind: "agent";
 	owner?: string;
+	/** Campo no-contratado (tolerado): pane del agente — sobrevive al cierre
+	 * del intento para locator de intentos posteriores (rev 005 F6). */
+	pane?: string;
 	project?: string;
 	state: DagrTaskState;
 	unblock?: string;
@@ -156,6 +159,7 @@ export function taskBorn(
 		title: o.title,
 		kind: "agent",
 		owner: o.agent,
+		pane: o.paneId,
 		state: o.blocked ? "blocked" : "working",
 		unblock: o.blocked ? "operator" : undefined,
 		attempts: [
@@ -192,7 +196,7 @@ export function taskPrompt(doc: DagrDoc, agent: string, note: string, now: Date)
 		n,
 		cause: { type: "followup", ref: prev?.id, reason: `herdr_prompt: ${firstLine(note)}` },
 		actor: agent,
-		locator: { pane: task.attempts[0]!.locator?.pane ?? "", agent },
+		locator: { pane: task.pane ?? task.attempts[0]?.locator?.pane ?? "", agent },
 		state: "working",
 		started_at: now.toISOString(),
 		liveness: { prompt_acknowledged: true },

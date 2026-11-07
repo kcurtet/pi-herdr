@@ -329,7 +329,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	pi.on("session_start", async (_event, ctx) => {
 		try {
 			const { dagr } = loadDefaults(configPath);
-						if (dagr.enabled && process.env.HERDR_ENV === "1") {
+			if (dagr.enabled && process.env.HERDR_ENV === "1") {
 				let sessionId: string | undefined;
 				try {
 					sessionId = ctx?.sessionManager?.getSessionId?.();
@@ -358,10 +358,9 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 						},
 					});
 					dagrBox.inner = recorder;
-									}
+				}
 			}
-		} catch (err) {
-			
+		} catch {
 			// el grafo jamás tumba la sesión (restricción spec 005)
 		}
 		const liveRestored: string[] = [];

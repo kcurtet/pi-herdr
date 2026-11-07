@@ -14,7 +14,7 @@
  *   (inyectado por index.ts; T7).
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -215,7 +215,12 @@ export class DagrRecorder implements DagrHook {
 	}
 
 	release(agent: string): void {
-		this.reserved.delete(agent);
+		// solo la ÚLTIMA reserva (rev 005 F7): las previas siguen siendo de born pendientes
+		const set = this.reserved.get(agent);
+		if (!set) return;
+		const last = [...set].at(-1);
+		if (last !== undefined) set.delete(last);
+		if (set.size === 0) this.reserved.delete(agent);
 	}
 
 	born(o: { agent: string; paneId: string; title: string; blocked: boolean }): void {
@@ -298,7 +303,13 @@ export class DagrRecorder implements DagrHook {
 		} catch (err) {
 			this.deps.warn(`validate falló (se publica igualmente): ${(err as Error).message}`);
 		}
-		renameSync(tmp, this.runPath);
+		// rename SIEMPRE; si algo revienta antes, el tmp no queda huérfano (rev 005 F8)
+		try {
+			renameSync(tmp, this.runPath);
+		} catch (err) {
+			rmSync(tmp, { force: true });
+			throw err;
+		}
 		try {
 			await this.deps.compose(this.runPath);
 		} catch (err) {

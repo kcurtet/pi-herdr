@@ -125,8 +125,6 @@ function statusText(deps: CommandDeps): string {
 		"",
 		`  herdr_dagr          ${dagr.enabled} (${dagr.origin.enabled}) — graba el grafo dagr de la sesión`,
 		`  herdr_dagr_children ${dagr.children} (${dagr.origin.children}) — auto-exime pi-herdr en hijos`,
-		"pi-herdr defaults (param de la tool > config > builtin):",
-		...lines,
 		...(warnings.length > 0 ? ["", `⚠ config: ${warnings.join(" · ")}`] : []),
 		"",
 		"Comandos:",

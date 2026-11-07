@@ -122,6 +122,15 @@ describe("ciclo de vida D0 (reducers)", () => {
 		expect(doc.tasks[0]!.attempts[0]!.state).toBe("working");
 	});
 
+	it("prompt tras settle: a2 conserva el pane del agente (rev 005 F6)", () => {
+		const doc = newDoc({ sessionId: "s1", title: "x", now: T0 });
+		taskBorn(doc, { agent: "b", paneId: "w1:p3", title: "t", blocked: false, now: t(1) });
+		taskSettled(doc, "b", "idle", t(2)); // a1 cerrado: locator retirado
+		taskPrompt(doc, "b", "otra ronda", t(3));
+		const a2 = doc.tasks[0]!.attempts[1]!;
+		expect(a2.locator).toEqual({ pane: "w1:p3", agent: "b" });
+	});
+
 	it("prompt → a2 working con cause followup(ref a1) + task working; agent_blocked no crea intento", () => {
 		const doc = newDoc({ sessionId: "s1", title: "x", now: T0 });
 		taskBorn(doc, { agent: "b", paneId: "w1:p3", title: "t", blocked: false, now: t(1) });

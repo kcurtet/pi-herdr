@@ -221,6 +221,70 @@ describe("composeFrom (D4)", () => {
 	});
 });
 
+describe("revisión 005 — F1: colisión de prefijo entre hermanos", () => {
+	it("sessPrefix: uuid usa la COLA (aleatoria), no la cabeza (timestamp uuidv7)", () => {
+		// dos uuidv7 nacidos a <1s comparten cabeza pero no cola
+		const a = sessPrefix("01a1b66c-44ba-76c5-adc4-ab9440364a2d");
+		const b = sessPrefix("01a1b66c-4d01-76c5-adc4-ffffffffffff");
+		expect(a).not.toBe(b);
+		expect(a).toBe("9440364a2d"); // últimos 10 chars saneados
+	});
+
+	it("dos hijos con el MISMO prefijo efectivo → bump -2, ids únicos, strict válido", async () => {
+		const st = newStateDir();
+		const root = newDoc({ sessionId: "root-nyx", title: "nyx", now: at(0), lineage: { session: "root-nyx", workspace: "nyx" } });
+		taskBorn(root, { agent: "abre", paneId: "w1:p2", title: "t", blocked: false, now: at(1) });
+		const rootPath = writeRun(st, "nyx", "root-nyx", root);
+		// ambos hijos con session id NO-uuid que sanea igual → prefijo idéntico
+		for (const sess of ["same-prefix", "same·prefix"]) {
+			const child = newDoc({
+				sessionId: sess,
+				title: sess,
+				now: at(2),
+				lineage: { parent_run: rootPath, parent_task: "abre-1", session: sess, workspace: `ws-${sess}` },
+			});
+			taskBorn(child, { agent: "builder", paneId: "w9:p1", title: "impl", blocked: false, now: at(3) });
+			writeRun(st, `ws-${sess.replace(/[^a-z]/g, "")}`, sess.replace(/[^a-z0-9-]/g, ""), child);
+		}
+		const composedPath = await composeFrom(fsComposeIO(st), rootPath);
+		expect(composedPath).toBeDefined();
+		const doc = readJson(composedPath!);
+		const projIds = (doc.projects ?? []).map((p) => p.id);
+		expect(new Set(projIds).size).toBe(projIds.length); // sin E104
+		const taskIds = doc.tasks.map((t) => t.id);
+		expect(new Set(taskIds).size).toBe(taskIds.length); // sin E110
+		expect(projIds.filter((id) => id.endsWith("-root"))).toHaveLength(2);
+		const bin = dagrBin();
+		if (bin) {
+			const out = execFileSync(bin, ["check", composedPath!, "--strict"], { encoding: "utf8" });
+			expect(out).toMatch(/clean/);
+		}
+	});
+});
+
+describe("revisión 005 — F3: ciclo que incluye a la raíz", () => {
+	it("A↔B: composeFrom(A) integra a B y NO duplica a A bajo B; warn de ciclo", async () => {
+		const st = newStateDir();
+		const aPath = join(st, "w", "a.json");
+		const bPath = join(st, "w", "b.json");
+		const a = newDoc({ sessionId: "a", title: "a", now: at(0), lineage: { parent_run: bPath, parent_task: "b-1", session: "a", workspace: "w" } });
+		taskBorn(a, { agent: "ta", paneId: "w1:p1", title: "tarea a", blocked: false, now: at(1) });
+		const b = newDoc({ sessionId: "b", title: "b", now: at(0), lineage: { parent_run: aPath, parent_task: "ta-1", session: "b", workspace: "w" } });
+		taskBorn(b, { agent: "tb", paneId: "w1:p2", title: "tarea b", blocked: false, now: at(1) });
+		writeRun(st, "w", "a", a);
+		writeRun(st, "w", "b", b);
+		const warns: string[] = [];
+		const composedPath = await composeFrom(fsComposeIO(st), aPath, (m) => warns.push(m));
+		expect(composedPath).toBeDefined();
+		const doc = readJson(composedPath!);
+		// A aparece UNA vez (como raíz), B integrada bajo la tarea de A… B es hija
+		// de A (parent_run=aPath) → wrapper w-a-1; A no reaparece prefijada
+		const taskIds = doc.tasks.map((t) => t.id);
+		expect(taskIds.filter((id) => id.includes("ta-1"))).toHaveLength(1);
+		expect(warns.join("\n")).toMatch(/ciclo/);
+	});
+});
+
 describe("patrón del hook de index (D4: el hijo regenera el composed de SU raíz)", () => {
 	it("findRoot(runPath del hijo) → composeFrom(raíz) integra al hijo recién escrito", async () => {
 		const st = newStateDir();

@@ -25,10 +25,22 @@ export interface ComposeIO {
 
 const MAX_DEPTH = 16;
 
-/** Prefijo de ids por sesión: [a-z0-9-], máx 10 chars. */
+/** Prefijo de ids por sesión: [a-z0-9-], máx 10 chars. OJO uuidv7: la CABEZA
+ * es timestamp puro (hermanos nacidos a segundos colisionan — revisión 005,
+ * hallazgo 1); para ids uuid se toma la COLA (parte aleatoria). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function sessPrefix(sessionId: string): string {
-	const p = sessionId.toLowerCase().replace(/[^a-z0-9-]+/g, "").slice(0, 10);
-	return p || "s";
+	const sanitized = sessionId.toLowerCase().replace(/[^a-z0-9-]+/g, "");
+	const from = UUID_RE.test(sessionId) ? sanitized.slice(-10) : sanitized.slice(0, 10);
+	return from || "s";
+}
+
+/** Colisión de prefijo entre hermanos (mismo bucket): bump -2, -3… — el
+ * composed NUNCA se publica con ids duplicados (E104/E110, revisión 005 F1). */
+function dedupPrefix(prefix: string, projects: { id: string }[]): string {
+	let p = prefix;
+	while (projects.some((x) => x.id === `${p}-root`)) p = `${p}-2`;
+	return p;
 }
 
 /** IO real sobre el state dir. */
@@ -138,12 +150,16 @@ export async function composeFrom(io: ComposeIO, rootPath: string, warn: (m: str
 	};
 	const integrated = new Map<string, Integrated>([[rootPath, { taskMap: new Map(rootDoc.tasks.map((t) => [t.id, t.id])) }]]);
 
-	// BFS con guardas de ciclo: un path ya integrado no se reintegra
+	// BFS con guardas de ciclo: un path ya integrado no se reintegra (la RAÍZ
+	// tampoco — con linaje corrupto A↔B, A no debe duplicarse bajo B; revisión 005 F3)
 	const queue = [...rootChildren];
-	const done = new Set<string>();
+	const done = new Set<string>([rootPath]);
 	while (queue.length > 0) {
 		const childPath = queue.shift()!;
-		if (done.has(childPath)) continue; // ciclo: ya está debajo
+		if (done.has(childPath)) {
+			warn(`compose: ciclo de linaje (${basename(childPath)} ya integrado) — se salta y se loguea`);
+			continue;
+		}
 		done.add(childPath);
 		const child = docs.get(childPath);
 		if (!child) {
@@ -164,7 +180,7 @@ export async function composeFrom(io: ComposeIO, rootPath: string, warn: (m: str
 			continue;
 		}
 
-		const prefix = sessPrefix(child.run.id);
+		const prefix = dedupPrefix(sessPrefix(child.run.id), composed.projects ?? []);
 		const taskMap = new Map<string, string>();
 		for (const t of child.tasks) taskMap.set(t.id, `${prefix}-${t.id}`);
 		const attemptMap = new Map<string, string>();

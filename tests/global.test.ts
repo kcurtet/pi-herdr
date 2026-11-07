@@ -68,16 +68,11 @@ describe("formatGlobalList (A2)", () => {
 });
 
 describe("Watches", () => {
-	function setup(states: string[], onOwnEvent?: (target: string, ev: unknown) => void) {
+	function setup(states: string[]) {
 		const { run, calls } = fakeRun(routes);
 		const spawns = { n: 0, targets: [] as string[] };
 		const events: { content: string; details: Record<string, unknown> }[] = [];
-		const watches = new Watches({
-			run,
-			spawnWait: waitSeq(states, spawns),
-			emit: (content, details) => events.push({ content, details }),
-			onOwnEvent: onOwnEvent as never,
-		});
+		const watches = new Watches({ run, spawnWait: waitSeq(states, spawns), emit: (content, details) => events.push({ content, details }) });
 		return { watches, events, calls, spawns };
 	}
 
