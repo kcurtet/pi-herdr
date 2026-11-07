@@ -154,6 +154,19 @@ describe("agentRead", () => {
 		await agentRead(run, { name: "impl-x", lines: 50 });
 		expect(calls[0].args).toContain("50");
 	});
+	it("devuelve la lectura limpia de chrome del TUI de pi", async () => {
+		const raw = [
+			"resultado final",
+			"",
+			"─".repeat(142),
+			" ──",
+			" ~/dev/nyx (main)",
+			" ↑44k ↓19k 4.8%/1.0M (auto)   (zai-coding-cn) glm-5.3 •",
+			" high",
+		].join("\n");
+		const { run } = fakeRun({ "agent read": ok(raw) });
+		expect(await agentRead(run, { name: "impl-x" })).toBe("resultado final");
+	});
 });
 
 describe("closeTarget", () => {

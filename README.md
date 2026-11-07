@@ -10,7 +10,7 @@ Requiere correr dentro de herdr (`HERDR_ENV=1`).
 |---|---|
 | `herdr_dispatch` | Despacha un agente visible (default: tab en la workspace actual, kind pi) y devuelve `{agent, paneId, taskId}` al instante. Params: `task` (requerida), `name`, `cwd`, `topology` (tab\|pane\|workspace), `kind`, `worktree`, `keepOpen`, `skills`, `extensions`. |
 | `herdr_prompt` | Segunda ronda a un agente vivo de esta sesión. |
-| `herdr_read` | Salida del agente (recent-unwrapped, default 200 líneas). |
+| `herdr_read` | Salida del agente (recent-unwrapped, default 200 líneas), limpia de chrome del TUI de pi: reglas full-width, statusline y padding no llegan al consumidor. |
 | `herdr_stop` | Abandona ya: cierra su tab/pane/workspace y limpia su worktree. |
 | `herdr_agents` | Lista los despachos de la sesión. |
 

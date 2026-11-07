@@ -8,6 +8,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { cleanAgentRead } from "./readclean.ts";
+
 const execFileAsync = promisify(execFile);
 
 /** Timeout por defecto para comandos de control herdr. */
@@ -155,7 +157,7 @@ export async function agentPrompt(run: RunFn, o: { name: string; text: string })
 }
 
 export async function agentRead(run: RunFn, o: { name: string; lines?: number }): Promise<string> {
-	return runOk(run, [
+	const stdout = await runOk(run, [
 		"agent",
 		"read",
 		o.name,
@@ -164,6 +166,9 @@ export async function agentRead(run: RunFn, o: { name: string; lines?: number })
 		"--lines",
 		String(o.lines ?? 200),
 	]);
+	// el snapshot crudo trae el chrome del TUI de pi (reglas, statusline, padding):
+	// se recorta antes de que la salida llegue a eventos settle o a herdr_read
+	return cleanAgentRead(stdout);
 }
 
 export async function agentList(run: RunFn): Promise<AgentInfo[]> {
