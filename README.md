@@ -58,6 +58,16 @@ Estilo turnkit: wizard + autocompletado + persistencia en `$PI_HOME/extensions-c
 
 Los 6 defaults: `skills`, `extensions`, `topology`, `kind`, `keepOpen`, `worktree`. Jerarquía: **param de la tool > config > builtin**.
 
+## Auto-dagr (spec 005)
+
+Con `HERDR_ENV=1` cada sesión con pi-herdr graba **su propio grafo dagr** (contrato v3) en `~/.local/state/herdr-dagr/<workspace-label>/<session-id>.json` — sin cooperación de ningún agente:
+
+- `herdr_dispatch` crea la tarea (id estable `<agente>-<n>`, kind `agent`) con intento a1 y el estado REAL de herdr; `herdr_prompt` añade intentos (a2, a3…); settle/blocked/gone/stop/reconcile/shutdown actualizan según el mapeo D0 (settle → `settled_unverified`/`asserted` — nunca éxito verificado; blocked → tarea `blocked` con unblock operator; gone → intento `lost` + tarea `failed`; stop/fin de sesión → tarea `canceled`).
+- **Linaje**: el dispatch inyecta `DAGR_RUN`/`DAGR_TASK` al hijo vía `--env` al crear la topología; la sesión hija registra `lineage` en su propio run. Con dagr activo los hijos arrancan con pi-herdr auto-exento (como herdr-agent-state) para que graben su subárbol — escape: `herdr_dagr_children: false`.
+- **Vista compuesta**: tras cada write, la sesión regenera `composed-<raíz>.json` (atómico, último-gana) integrando hijos bajo SU tarea mediante proyectos wrapper. Abre el pane de dagr sobre ese fichero y ves los tres niveles (Nyx → orquestadores → trabajadores) en vivo.
+- Grabado jamás rompe ni retrasa una tool: writes tmp→rename serializados, errores → warning y seguir; `dagr check --strict` sobre el tmp como validación blanda si el binario está (PATH o plugin instalado).
+- Config: `herdr_dagr: false` apaga todo (ni ficheros ni inyección); `PI_HERDR_DAGR_STATE_DIR` reubica el estado (tests/nichos). `/herdr` muestra ambos flags (readonly).
+
 ## Install
 
 ```
