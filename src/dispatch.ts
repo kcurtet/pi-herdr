@@ -15,6 +15,7 @@ import {
 	type RunFn,
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
+import { firstLine } from "./dagrdoc.ts";
 import { armWatcher, type WaitPhase } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, resolveRepoRoot, rollbackNote, type WorktreeRef } from "./worktree.ts";
@@ -22,6 +23,7 @@ import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode, runSetup } from 
 import { type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
+import type { DagrHook } from "./dagr.ts";
 import type { SettleHandler } from "./settle.ts";
 
 // re-export por compatibilidad: consumers (y tests) históricamente importan
@@ -66,6 +68,8 @@ export interface DispatchDeps {
 	resourceDirs: ResourceDirs;
 	/** Defaults persistidos, RECARGADOS en cada dispatch (spec 002 D7/R6). */
 	getConfig: () => DispatchDefaults;
+	/** Grabado del grafo dagr (spec 005); ausente = dagr off, tools idénticas. */
+	dagr?: DagrHook;
 }
 
 /** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
@@ -181,6 +185,32 @@ export async function dispatch(
 	name = avoidRegistry(name, deps.registry, await liveNames(deps.run));
 	const topology = effective.topology;
 
+	// spec 005 D3: reserva del task id ANTES de crear topología — el env de linaje
+	// (DAGR_RUN/DAGR_TASK) va en el create; born llega tras registry.add.
+	const dagrRes = deps.dagr?.reserve(name);
+	try {
+		return await dispatchArmed(deps, { ...input, task }, effective, piArgs, env, name, topology, cwd, dagrRes?.env);
+	} catch (err) {
+		// R-E: reserva sin tarea (dispatch fallido) — no contamina el grafo
+		deps.dagr?.release(name);
+		throw err;
+	}
+}
+
+/** Fase post-reserva: todo fallo aquí libera la reserva vía el catch de dispatch(). */
+async function dispatchArmed(
+	deps: DispatchDeps,
+	input: DispatchInput,
+	effective: ReturnType<typeof mergeInput>,
+	piArgs: string[],
+	env: Record<string, string | undefined>,
+	name: string,
+	topology: "tab" | "pane" | "workspace",
+	cwd: string,
+	dagrEnv?: Record<string, string>,
+): Promise<DispatchResult> {
+	const task = input.task;
+
 	// spec 003: modo de setup validado y detectado ANTES de crear nada (D1/D2:
 	// error temprano, CERO side effects). Detección sobre la RAÍZ del repo — el
 	// cwd puede ser un subdirectorio (monorepos) y el agente acaba en la raíz
@@ -229,14 +259,14 @@ export async function dispatch(
 	let paneId: string;
 	let targetId: string;
 	if (topology === "pane") {
-		paneId = (await paneSplitRight(deps.run, { cwd: agentCwd, pane: env.HERDR_PANE_ID })).paneId;
+		paneId = (await paneSplitRight(deps.run, { cwd: agentCwd, pane: env.HERDR_PANE_ID, env: dagrEnv })).paneId;
 		targetId = paneId;
 	} else if (topology === "workspace") {
-		const w = await workspaceCreate(deps.run, { cwd: agentCwd, label: name });
+		const w = await workspaceCreate(deps.run, { cwd: agentCwd, label: name, env: dagrEnv });
 		paneId = w.paneId;
 		targetId = w.workspaceId;
 	} else {
-		const t = await tabCreate(deps.run, { cwd: agentCwd, label: name, workspace: env.HERDR_WORKSPACE_ID });
+		const t = await tabCreate(deps.run, { cwd: agentCwd, label: name, workspace: env.HERDR_WORKSPACE_ID, env: dagrEnv });
 		paneId = t.paneId;
 		targetId = t.tabId;
 	}
@@ -280,5 +310,12 @@ export async function dispatch(
 		name,
 		(ev) => deps.settleFor()(name, ev),
 	);
+	// spec 005 D1: nace la tarea del grafo — con el estado REAL de herdr
+	deps.dagr?.born({
+		agent: name,
+		paneId,
+		title: firstLine(task),
+		blocked: promptResult === "blocked",
+	});
 	return { agent: name, paneId, taskId: rec.taskId, worktreePath: worktree?.dir, setupNote, initialBlocked: promptResult === "blocked" || undefined };
 }
