@@ -32,7 +32,7 @@ import { loadDefaults, saveDefaults } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
 import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
 import { DagrRecorder, NO_DAGR, stateDirOf, type DagrHook } from "./src/dagr.ts";
-import { composeFrom, fsComposeIO } from "./src/dagrcompose.ts";
+import { composeFrom, findRoot, fsComposeIO } from "./src/dagrcompose.ts";
 import { basename, join } from "node:path";
 
 const DispatchParams = Type.Object(
@@ -348,7 +348,13 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 						children: dagr.children,
 						deps: {
 							stateDir,
-							compose: (rp) => composeFrom(fsComposeIO(stateDir), rp),
+							// spec 005 D4: tras cada write, composed DE SU RAÍZ (el hijo
+							// regenera el composed de la raíz — árbol siempre fresco)
+							compose: async (rp): Promise<string | undefined> => {
+								const io = fsComposeIO(stateDir);
+								const root = await findRoot(io, rp);
+								return root ? await composeFrom(io, root) : undefined;
+							},
 						},
 					});
 					dagrBox.inner = recorder;

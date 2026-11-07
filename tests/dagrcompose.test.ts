@@ -220,3 +220,26 @@ describe("composeFrom (D4)", () => {
 		expect(doc.tasks.map((t) => t.id)).toEqual(["abre-1", `${sessPrefix("other-1")}-rev-1`]);
 	});
 });
+
+describe("patrón del hook de index (D4: el hijo regenera el composed de SU raíz)", () => {
+	it("findRoot(runPath del hijo) → composeFrom(raíz) integra al hijo recién escrito", async () => {
+		const st = newStateDir();
+		const { rootPath } = threeLevels(st);
+		// sesión hija nueva que escribe su run con linaje
+		const child = newDoc({
+			sessionId: "nueva-1",
+			title: "nueva",
+			now: at(8),
+			lineage: { parent_run: rootPath, parent_task: "abre-1", session: "nueva-1", workspace: "nueva-ws" },
+		});
+		taskBorn(child, { agent: "extra", paneId: "w4:p1", title: "trabajo extra", blocked: false, now: at(9) });
+		const childPath = writeRun(st, "nueva-ws", "nueva-1", child);
+		const io = fsComposeIO(st);
+		const root = await findRoot(io, childPath);
+		expect(root).toBe(rootPath);
+		const out = await composeFrom(io, root!);
+		expect(out).toBeDefined();
+		const doc = readJson(out!);
+		expect(doc.tasks.some((t) => t.id === `${sessPrefix("nueva-1")}-extra-1`)).toBe(true);
+	});
+});
