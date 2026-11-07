@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -458,4 +458,114 @@ describe("factory de la extensión", () => {
 		const items = (completions!("conf") ?? []) as { value: string }[];
 		expect(items.map((i) => i.value)).toEqual(["config "]);
 	});
+
+describe("session_start — recorder dagr (spec 005)", () => {
+	async function withDagrEnv(fn: () => Promise<void> | void, o: { env?: Record<string, string | undefined>; config?: string | null; ws?: string | null } = {}) {
+		const prev = { HERDR_ENV: process.env.HERDR_ENV, PI_HERDR_DAGR_STATE_DIR: process.env.PI_HERDR_DAGR_STATE_DIR, PI_SESSION_ID: process.env.PI_SESSION_ID, HERDR_WORKSPACE_ID: process.env.HERDR_WORKSPACE_ID };
+		const state = mkdtempSync(join(tmpdir(), "pi-herdr-dagr-idx-"));
+		process.env.PI_HERDR_DAGR_STATE_DIR = join(state, "st");
+		if (o.env && "HERDR_ENV" in o.env) {
+			if (o.env.HERDR_ENV === undefined) delete process.env.HERDR_ENV;
+			else process.env.HERDR_ENV = o.env.HERDR_ENV;
+		} else {
+			process.env.HERDR_ENV = "1";
+		}
+		process.env.PI_SESSION_ID = "sess-test-1";
+		if (o.ws === null) delete process.env.HERDR_WORKSPACE_ID;
+		else process.env.HERDR_WORKSPACE_ID = o.ws ?? "w1";
+		try {
+			// PI_HOME aislado (con config opcional) — el helper del otro describe está
+			// scopeado; versión mínima inline.
+			const prevHome = process.env.PI_HOME;
+			const home = mkdtempSync(join(tmpdir(), "pi-herdr-dagr-home-"));
+			mkdirSync(join(home, "extensions-config"), { recursive: true });
+			writeFileSync(join(home, "extensions-config", "pi-herdr.json"), o.config ?? JSON.stringify({ defaults: {} }));
+			process.env.PI_HOME = home;
+			try {
+				await fn();
+			} finally {
+				if (prevHome === undefined) delete process.env.PI_HOME;
+				else process.env.PI_HOME = prevHome;
+				rmSync(home, { recursive: true, force: true });
+			}
+		} finally {
+			for (const [k, v] of Object.entries(prev)) {
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			}
+			rmSync(state, { recursive: true, force: true });
+		}
+	}
+
+	it("HERDR_ENV + dagr on: crea el run eager de la sesión", async () => {
+		await withDagrEnv(async () => {
+			const { api, handlers } = fakeApi();
+			extension(api as never);
+			const ctx = {
+				sessionManager: {
+					getBranch: () => [],
+					getSessionId: () => "ctx-sess-1",
+				},
+			};
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, ctx);
+			}
+			const st = process.env.PI_HERDR_DAGR_STATE_DIR!;
+			const runPath = join(st, "default", "ctx-sess-1.json");
+			expect(existsSync(runPath)).toBe(true);
+			const doc = JSON.parse(readFileSync(runPath, "utf8"));
+			expect(doc.run.id).toBe("ctx-sess-1");
+			expect(doc.tasks).toEqual([]);
+		}, { ws: null });
+	});
+
+	it("workspace label de herdr workspace list resuelve el dir del run", async () => {
+		await withDagrEnv(async () => {
+			const { api, handlers } = fakeApi();
+			extension(api as never);
+			// la ruta 'workspace list' no está mockeada → fallback al slug del id
+			const ctx = { sessionManager: { getBranch: () => [], getSessionId: () => "s2" } };
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, ctx);
+			}
+			expect(existsSync(join(process.env.PI_HERDR_DAGR_STATE_DIR!, "w1", "s2.json"))).toBe(true);
+		});
+	});
+
+	it("herdr_dagr:false → ni ficheros ni recorder (A5)", async () => {
+		await withDagrEnv(async () => {
+			const { api, handlers } = fakeApi();
+			extension(api as never);
+			const ctx = { sessionManager: { getBranch: () => [], getSessionId: () => "s3" } };
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, ctx);
+			}
+			expect(existsSync(process.env.PI_HERDR_DAGR_STATE_DIR!)).toBe(false);
+		}, { config: JSON.stringify({ herdr_dagr: false }) });
+	});
+
+	it("HERDR_ENV unset → sin recorder (ruling R-F)", async () => {
+		await withDagrEnv(async () => {
+			const { api, handlers } = fakeApi();
+			extension(api as never);
+			const ctx = { sessionManager: { getBranch: () => [], getSessionId: () => "s4" } };
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await h.fn(undefined, ctx);
+			}
+			expect(existsSync(process.env.PI_HERDR_DAGR_STATE_DIR!)).toBe(false);
+		}, { env: { HERDR_ENV: undefined } });
+	});
+
+	it("session_start que lanza (getSessionId roto) no rompe la sesión: el grafo jamás tumba nada", async () => {
+		await withDagrEnv(async () => {
+			const { api, handlers } = fakeApi();
+			extension(api as never);
+			const ctx = { sessionManager: { getBranch: () => [], getSessionId: () => { throw new Error("boom"); } } };
+			for (const h of handlers.filter((x) => x.event === "session_start")) {
+				await expect(Promise.resolve(h.fn(undefined, ctx))).resolves.toBeUndefined();
+			}
+		});
+	});
 });
+});
+

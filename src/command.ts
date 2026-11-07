@@ -3,7 +3,7 @@
  * interactivo y autocompletado. Patrón turnkit.
  */
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
-import { BUILTIN as DEFAULTS, TOPOLOGIES, loadRawDefaults, type DispatchDefaults } from "./config.ts";
+import { BUILTIN as DEFAULTS, TOPOLOGIES, loadRawDefaults, type DispatchDefaults, type DagrFlags } from "./config.ts";
 
 export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -15,7 +15,7 @@ const BUILTIN: Record<ConfigKey, string> = Object.fromEntries(
 
 export interface CommandDeps {
 	configPath: string;
-	load: () => { defaults: DispatchDefaults; warnings: string[] };
+	load: () => { defaults: DispatchDefaults; warnings: string[]; dagr: DagrFlags };
 	save: (d: DispatchDefaults) => void;
 	skillNames: () => string[];
 	extNames: () => string[];
@@ -113,7 +113,7 @@ function warnIfUndispatchable(
 }
 
 function statusText(deps: CommandDeps): string {
-	const { defaults, warnings } = deps.load();
+	const { defaults, warnings, dagr } = deps.load();
 	const lines = CONFIG_KEYS.map((key) => {
 		const v = defaults[key];
 		const shown = v === undefined ? `${BUILTIN[key]} (builtin)` : `${fmt(v)} (config)`;
@@ -122,6 +122,9 @@ function statusText(deps: CommandDeps): string {
 	return [
 		"pi-herdr defaults (param de la tool > config > builtin):",
 		...lines,
+		"",
+		`  herdr_dagr          ${dagr.enabled} (${dagr.origin.enabled}) — graba el grafo dagr de la sesión`,
+		`  herdr_dagr_children ${dagr.children} (${dagr.origin.children}) — auto-exime pi-herdr en hijos`,
 		...(warnings.length > 0 ? ["", `⚠ config: ${warnings.join(" · ")}`] : []),
 		"",
 		"Comandos:",

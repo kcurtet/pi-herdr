@@ -207,3 +207,35 @@ describe("localRun timeout", () => {
 		expect(err.stderr).toContain("pre-kill-err");
 	});
 });
+
+describe("inyección de env al crear topología (spec 005 D3)", () => {
+	it("tabCreate con env → --env K=V tras --label, antes de --no-focus", async () => {
+		const { run, calls } = fakeRun({ "tab create": ok(fx("tab-create")) });
+		await tabCreate(run, { cwd: "/repo", label: "x", env: { DAGR_RUN: "/r.json", DAGR_TASK: "t-1" } });
+		expect(calls[0].args).toEqual([
+			"tab", "create", "--cwd", "/repo", "--label", "x",
+			"--env", "DAGR_RUN=/r.json", "--env", "DAGR_TASK=t-1", "--no-focus",
+		]);
+	});
+	it("paneSplitRight con env → --env tras --direction/--cwd", async () => {
+		const { run, calls } = fakeRun({ "pane split": ok(fx("pane-split")) });
+		await paneSplitRight(run, { cwd: "/repo", pane: "w1:p2", env: { DAGR_RUN: "/r.json", DAGR_TASK: "t-1" } });
+		expect(calls[0].args).toEqual([
+			"pane", "split", "w1:p2", "--direction", "right", "--cwd", "/repo",
+			"--env", "DAGR_RUN=/r.json", "--env", "DAGR_TASK=t-1",
+		]);
+	});
+	it("workspaceCreate con env → --env tras --label, antes de --no-focus", async () => {
+		const { run, calls } = fakeRun({ "workspace create": ok(fx("workspace-create")) });
+		await workspaceCreate(run, { cwd: "/repo", label: "x", env: { DAGR_RUN: "/r.json", DAGR_TASK: "t-1" } });
+		expect(calls[0].args).toEqual([
+			"workspace", "create", "--cwd", "/repo", "--label", "x",
+			"--env", "DAGR_RUN=/r.json", "--env", "DAGR_TASK=t-1", "--no-focus",
+		]);
+	});
+	it("sin env → args idénticos a hoy (regresión)", async () => {
+		const { run, calls } = fakeRun({ "tab create": ok(fx("tab-create")) });
+		await tabCreate(run, { cwd: "/repo", label: "x" });
+		expect(calls[0].args).toEqual(["tab", "create", "--cwd", "/repo", "--label", "x", "--no-focus"]);
+	});
+});

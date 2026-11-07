@@ -67,7 +67,7 @@ function readSettings(d: ResourceDirs): ParsedSettings {
 }
 
 /** Entry de un paquete pi: package.json → pi.extensions[0], absoluto. */
-function packageEntry(pkgDir: string): string {
+export function packageEntry(pkgDir: string): string {
 	const pkgPath = join(pkgDir, "package.json");
 	if (!existsSync(pkgPath)) {
 		throw new Error(`pi-herdr: ${pkgDir} no tiene package.json (¿instalación incompleta?)`);

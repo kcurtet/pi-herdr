@@ -184,3 +184,13 @@ describe("completions", () => {
 		expect(vals("config extensions ")).toEqual(["true", "false", "pi-monitor"]);
 	});
 });
+
+describe("/herdr bare — flags dagr readonly (spec 005 D5)", () => {
+	it("muestra herdr_dagr/herdr_dagr_children con origen", async () => {
+		const s = setup();
+		await s.cmd.handler("", s.ctx);
+		const msg = s.notifies[0]!.msg;
+		expect(msg).toMatch(/herdr_dagr\s+true \(builtin\)/);
+		expect(msg).toMatch(/herdr_dagr_children\s+true \(builtin\)/);
+	});
+});

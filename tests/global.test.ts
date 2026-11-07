@@ -243,3 +243,43 @@ describe("groupByProject / formatByProject (orquestar orquestadores)", () => {
 		expect(formatByProject([])).toBe("No hay agentes en herdr.");
 	});
 });
+
+
+describe("Watches — onOwnEvent (spec 005 D1)", () => {
+	function setup(states: string[], onOwnEvent?: (target: string, ev: unknown) => void) {
+		const { run } = fakeRun(routes);
+		const spawns = { n: 0, targets: [] as string[] };
+		const events: { content: string; details: Record<string, unknown> }[] = [];
+		const watches = new Watches({
+			run,
+			spawnWait: waitSeq(states, spawns),
+			emit: (content, details) => events.push({ content, details }),
+			onOwnEvent: onOwnEvent as never,
+		});
+		return { watches, events, spawns };
+	}
+
+	it("eventos de vigilados llegan a onOwnEvent (target + ev) para que index aplique D0", async () => {
+		const own: { target: string; kind: string }[] = [];
+		const { watches } = setup(["idle"], (target, ev) => own.push({ target, kind: (ev as { kind: string }).kind }));
+		await watches.watch("w1D:p1");
+		await waitFor(() => own.length === 1, "onOwnEvent settled");
+		expect(own[0]).toEqual({ target: "w1D:p1", kind: "settled" });
+	});
+
+	it("onOwnEvent que lanza NO rompe el aviso normal (grafo jamás tumba la tool)", async () => {
+		const { watches, events } = setup(["idle"], () => {
+			throw new Error("dagr roto");
+		});
+		await watches.watch("w1D:p1");
+		await waitFor(() => events.length === 1, "aviso emitido igualmente");
+		expect(events[0]!.content).toContain("ha terminado");
+	});
+
+	it("sin onOwnEvent: comportamiento intacto (regresión)", async () => {
+		const { watches, events } = setup(["idle"]);
+		await watches.watch("w1D:p1");
+		await waitFor(() => events.length === 1, "evento settled");
+		expect(watches.has("w1D:p1")).toBe(false);
+	});
+});

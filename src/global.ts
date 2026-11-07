@@ -178,6 +178,9 @@ export interface GlobalWatchDeps extends Omit<WatchDeps, "verifyAgent"> {
 	emit: WatchEmit;
 	/** Seam de tests: por defecto armWatcher real. */
 	arm?: typeof armWatcher;
+	/** spec 005 D1: eventos de vigilados para el grabado dagr (index decide si
+	 * el target es despacho propio). Invocado tras el manejo propio; nunca lanza. */
+	onOwnEvent?: (target: string, ev: WatchEvent) => void;
 }
 
 /**
@@ -226,6 +229,7 @@ export class Watches {
 
 	/** true = seguir vigilando (contrato de armWatcher). */
 	private async onEvent(target: string, label: string, ev: WatchEvent, keep: boolean): Promise<boolean> {
+		this.ownEvent(target, ev);
 		const details = { target, label, kind: ev.kind };
 		if (ev.kind === "blocked") {
 			this.deps.emit(`herdr: ${label} está bloqueado esperando una decisión en su panel (${target}).\n\n${BRIEF_HINT}`, details);
@@ -244,6 +248,15 @@ export class Watches {
 		const why = ev.kind === "gone" ? "ha desaparecido" : "ya no se puede vigilar";
 		this.deps.emit(`herdr: ${label} ${why} (${ev.reason}).\n\n${BRIEF_HINT}`, details);
 		return false;
+	}
+
+	/** El grafo jamás tumba la vigilancia (restricción spec 005). */
+	private ownEvent(target: string, ev: WatchEvent): void {
+		try {
+			this.deps.onOwnEvent?.(target, ev);
+		} catch {
+			// grabado opcional: tragado a propósito
+		}
 	}
 }
 

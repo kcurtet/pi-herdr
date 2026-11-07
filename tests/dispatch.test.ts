@@ -814,3 +814,166 @@ describe("waitArgs (herdr agent wait) — issue #7", () => {
 		]);
 	});
 });
+
+describe("dispatch — linaje dagr (spec 005 D3)", () => {
+	function dagrFake() {
+		const calls: { what: string; arg?: unknown }[] = [];
+		const hook = {
+			reserve: (agent: string) => {
+				calls.push({ what: "reserve", arg: agent });
+				return { env: { DAGR_RUN: "/st/nyx/s0.json", DAGR_TASK: `${agent}-1` }, task: `${agent}-1` };
+			},
+			release: (agent: string) => calls.push({ what: "release", arg: agent }),
+			born: (o: { agent: string; paneId: string; title: string; blocked: boolean }) =>
+				calls.push({ what: "born", arg: o }),
+			childrenExempt: true,
+			prompt: () => undefined,
+			blocked: () => undefined,
+			settled: () => undefined,
+			gone: () => undefined,
+			canceled: () => undefined,
+			note: () => undefined,
+		};
+		return { hook, calls };
+	}
+
+	function envOf(args: string[]): Record<string, string> {
+		const out: Record<string, string> = {};
+		for (let i = 0; i < args.length; i++) {
+			if (args[i] === "--env") {
+				const [k, v] = args[i + 1]!.split("=");
+				out[k!] = v!;
+			}
+		}
+		return out;
+	}
+
+	it("reserve ANTES de tab create; born tras registry.add con título y estado real", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { hook, calls: dc } = dagrFake();
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		deps.dagr = hook;
+		await dispatch(deps, { task: "construye el login\nmás contexto" }, { HERDR_ENV: "1" });
+		const reserveAt = dc.findIndex((c) => c.what === "reserve");
+		const tabAt = calls.findIndex((c) => c.args[1] === "create");
+		expect(reserveAt).toBeGreaterThanOrEqual(0);
+		expect(tabAt).toBeGreaterThan(reserveAt);
+		const tabArgs = calls[tabAt]!.args;
+		const born = dc.find((c) => c.what === "born")!.arg as { agent: string; paneId: string; title: string; blocked: boolean };
+		expect(envOf(tabArgs)).toEqual({ DAGR_RUN: "/st/nyx/s0.json", DAGR_TASK: `${born.agent}-1` });
+		expect(calls[tabAt]!.args).toContain("--env");
+		expect(born.agent).toBe("construye-login-mas");
+		expect(born.paneId).toBe("w4:p4M");
+		expect(born.title).toBe("construye el login");
+		expect(born.blocked).toBe(false);
+		expect(registry.get("construye-login-mas")).toBeDefined();
+	});
+
+	it("initialBlocked → born con blocked:true", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const { hook, calls: dc } = dagrFake();
+		const { deps } = makeDeps({ run });
+		deps.dagr = hook;
+		await dispatch(deps, { task: "tarea que bloquea" }, { HERDR_ENV: "1" });
+		const born = dc.find((c) => c.what === "born")!.arg as { blocked: boolean };
+		expect(born.blocked).toBe(true);
+	});
+
+	it("fallo post-reserva (agent start) → release, CERO born, sin env colgante", async () => {
+		const { run } = fakeRun({ ...routes, "agent start": { code: 1, stdout: "boom", stderr: "no pane" } });
+		const { hook, calls: dc } = dagrFake();
+		const { deps } = makeDeps({ run });
+		deps.dagr = hook;
+		await expect(dispatch(deps, { task: "tarea x" }, { HERDR_ENV: "1" })).rejects.toThrow(/boom|no pane/);
+		expect(dc.some((c) => c.what === "release")).toBe(true);
+		expect(dc.some((c) => c.what === "born")).toBe(false);
+	});
+
+	it("sin hook (dagr off): cero --env, behavior idéntico (A5)", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { deps } = makeDeps({ run });
+		await dispatch(deps, { task: "tarea normal" }, { HERDR_ENV: "1" });
+		const tabArgs = calls.find((c) => c.args[1] === "create")!.args;
+		expect(tabArgs.some((a) => a === "--env")).toBe(false);
+	});
+
+	it("las 3 topologías reciben el env", async () => {
+		const { hook } = dagrFake();
+		for (const topology of ["tab", "pane", "workspace"] as const) {
+			const extra = {
+				"pane split": ok(fx("pane-split")),
+				"workspace create": ok(fx("workspace-create")),
+			};
+			const { run, calls } = fakeRun({ ...routes, ...extra });
+			const { deps } = makeDeps({ run });
+			deps.dagr = hook;
+			await dispatch(deps, { task: "tarea t", topology }, { HERDR_ENV: "1" });
+			const create = calls.find((c) => ["create", "split"].includes(c.args[1] ?? ""))!;
+			expect(envOf(create.args).DAGR_RUN).toBe("/st/nyx/s0.json");
+		}
+	});
+
+	it("kind!=pi: env inyectado igual (linaje no es de pi) aunque piArgs=[]", async () => {
+		const { run, calls } = fakeRun(routes);
+		const { hook } = dagrFake();
+		const { deps } = makeDeps({ run });
+		deps.dagr = hook;
+		await dispatch(deps, { task: "tarea claude", kind: "claude" }, { HERDR_ENV: "1" });
+		const start = calls.find((c) => c.args[1] === "start")!;
+		expect(start.args).not.toContain("--");
+		const tabArgs = calls.find((c) => c.args[1] === "create")!.args;
+		expect(envOf(tabArgs).DAGR_TASK).toBe("tarea-claude-1");
+	});
+});
+
+describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
+	function dagrFake() {
+		const calls: { what: string; arg?: unknown }[] = [];
+		const hook = {
+			reserve: () => undefined,
+			born: () => undefined,
+			release: () => undefined,
+			childrenExempt: false,
+			prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
+			blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
+			settled: () => undefined,
+			gone: () => undefined,
+			canceled: () => undefined,
+			note: () => undefined,
+		};
+		return { hook, calls };
+	}
+
+	it("submitted → hook.prompt con el texto del prompt", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const { hook, calls } = dagrFake();
+		deps.dagr = hook;
+		await promptAgent(deps, "impl-x", "ahora los tests\ncon detalle");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.arg).toEqual(["impl-x", "ahora los tests\ncon detalle"]);
+	});
+
+	it("agent_blocked → hook.blocked, SIN nuevo intento", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const { hook, calls } = dagrFake();
+		deps.dagr = hook;
+		await promptAgent(deps, "impl-x", "sigue");
+		expect(calls.map((c) => c.what)).toEqual(["blocked"]);
+	});
+
+	it("sin hook: prompt funciona igual (regresión)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toMatch(/impl-x/);
+	});
+});
