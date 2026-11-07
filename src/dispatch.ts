@@ -121,8 +121,10 @@ export async function promptAgent(deps: DispatchDeps, name: string, text: string
 	}
 	const r = await agentPrompt(deps.run, { name, text });
 	if (r === "blocked") {
+		deps.dagr?.blocked(name);
 		return `El agente ${name} está bloqueado esperando aprobación o input: decide en su pane (visible en herdr) y vuelve a promptear después.`;
 	}
+	deps.dagr?.prompt(name, text);
 	return `Prompt enviado a ${name}. El watcher activo notificará el próximo settle; no re-armes nada.`;
 }
 

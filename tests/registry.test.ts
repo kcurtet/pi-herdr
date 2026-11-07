@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Registry, reconcile, stopAgent, type DispatchRecord } from "../src/registry.ts";
+import { Registry, reconcile, shutdownCleanup, stopAgent, type DispatchRecord } from "../src/registry.ts";
 import type { RunFn } from "../src/herdr.ts";
 import type { SettleHandler } from "../src/dispatch.ts";
 import type { EmitFn } from "../src/settle.ts";
@@ -229,5 +229,58 @@ describe("abandonDispatch — flag close y orden de efectos (issue #10)", () => 
 		expect(registry.get("impl-x")!.status).toBe("closed");
 		// markClosed al INICIO del helper (antes del cleanup/close pendientes) debe enrojecer.
 		expect(order).toEqual(["cleanup", "close:tab", "markClosed"]);
+	});
+});
+
+describe("grabado dagr en stop/reconcile/shutdown (spec 005 D0)", () => {
+	function dagrFake() {
+		const calls: { what: string; arg?: unknown }[] = [];
+		const hook = {
+			reserve: () => undefined,
+			born: () => undefined,
+			release: () => undefined,
+			childrenExempt: false,
+			prompt: () => undefined,
+			blocked: () => undefined,
+			settled: () => undefined,
+			gone: (a: string, r?: string) => calls.push({ what: "gone", arg: [a, r] }),
+			canceled: (a: string, r?: string) => calls.push({ what: "canceled", arg: [a, r] }),
+			note: () => undefined,
+		};
+		return { hook, calls };
+	}
+
+	it("stopAgent → canceled 'herdr_stop'", async () => {
+		const { hook, calls } = dagrFake();
+		const run = agentListRun(["x"]);
+		const registry = new Registry();
+		registry.add(rec({ agent: "a1" }));
+		const msg = await stopAgent({ run, registry, cleanupWorktree: async () => ({ removed: true }), dagr: hook }, "a1");
+		expect(msg).toMatch(/detenido/);
+		expect(calls).toEqual([{ what: "canceled", arg: ["a1", "herdr_stop"] }]);
+	});
+
+	it("shutdownCleanup → cada live canceled 'fin de sesión'; ya cerrados nada", async () => {
+		const { hook, calls } = dagrFake();
+		const run = agentListRun([]);
+		const registry = new Registry();
+		registry.add(rec({ agent: "a1" }));
+		registry.add(rec({ agent: "a2" }));
+		registry.add(rec({ agent: "a3", status: "closed" }));
+		await shutdownCleanup({ run, registry, cleanupWorktree: async () => ({ removed: true }), dagr: hook });
+		expect(calls).toEqual([
+			{ what: "canceled", arg: ["a1", "fin de sesión"] },
+			{ what: "canceled", arg: ["a2", "fin de sesión"] },
+		]);
+	});
+
+	it("reconcile: muerto → gone 'reconciled'; vivo → nada", async () => {
+		const { hook, calls } = dagrFake();
+		const registry = new Registry();
+		registry.add(rec({ agent: "vivo" }));
+		registry.add(rec({ agent: "muerto" }));
+		const base = reconcileDeps({ registry, run: agentListRun(["vivo"]) });
+		await reconcile({ ...base.deps, dagr: hook });
+		expect(calls).toEqual([{ what: "gone", arg: ["muerto", "reconciled: agent absent"] }]);
 	});
 });

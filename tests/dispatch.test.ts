@@ -926,3 +926,54 @@ describe("dispatch — linaje dagr (spec 005 D3)", () => {
 		expect(envOf(tabArgs).DAGR_TASK).toBe("tarea-claude-1");
 	});
 });
+
+describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
+	function dagrFake() {
+		const calls: { what: string; arg?: unknown }[] = [];
+		const hook = {
+			reserve: () => undefined,
+			born: () => undefined,
+			release: () => undefined,
+			childrenExempt: false,
+			prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
+			blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
+			settled: () => undefined,
+			gone: () => undefined,
+			canceled: () => undefined,
+			note: () => undefined,
+		};
+		return { hook, calls };
+	}
+
+	it("submitted → hook.prompt con el texto del prompt", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const { hook, calls } = dagrFake();
+		deps.dagr = hook;
+		await promptAgent(deps, "impl-x", "ahora los tests\ncon detalle");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.arg).toEqual(["impl-x", "ahora los tests\ncon detalle"]);
+	});
+
+	it("agent_blocked → hook.blocked, SIN nuevo intento", async () => {
+		const { run } = fakeRun({ ...routes, "agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" } });
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const { hook, calls } = dagrFake();
+		deps.dagr = hook;
+		await promptAgent(deps, "impl-x", "sigue");
+		expect(calls.map((c) => c.what)).toEqual(["blocked"]);
+	});
+
+	it("sin hook: prompt funciona igual (regresión)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toMatch(/impl-x/);
+	});
+});

@@ -12,6 +12,7 @@ import { closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
 import type { WatchEvent, WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
+import type { DagrHook } from "./dagr.ts";
 
 /** Handler de settle por agente: true = re-armar vigilancia, false = cerrar. */
 export type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
@@ -27,6 +28,8 @@ export interface SettleDeps {
 	registry: Registry;
 	emit: EmitFn;
 	cleanupWorktree: CleanupWorktreeFn;
+	/** Grabado dagr (spec 005 D1); ausente = sin grafo. */
+	dagr?: DagrHook;
 }
 
 export function formatEvent(name: string, ev: WatchEvent): string {
@@ -62,12 +65,14 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 
 		if (ev.kind === "blocked") {
 			deps.emit(formatEvent(name, ev), { customType: "herdr-dispatch-event", agent: name, kind: ev.kind });
+			deps.dagr?.blocked(name);
 			return true;
 		}
 
 		if (ev.kind === "settled" && rec.keepOpen) {
 			const content = `${formatEvent(name, ev)}\n\n(keepOpen: el pane queda abierto — usa herdr_prompt para otra ronda o herdr_stop para cerrar)`;
 			deps.emit(content, { customType: "herdr-dispatch-event", agent: name, kind: ev.kind, keepOpen: true });
+			deps.dagr?.settled(name, ev.state);
 			return true;
 		}
 
@@ -77,10 +82,12 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 			// el record queda live (herdr_stop disponible) y el watcher ya está
 			// detenido (stranded nunca re-arma) → devolver false suelta el handle.
 			deps.emit(formatEvent(name, ev), { customType: "herdr-dispatch-event", agent: name, kind: ev.kind });
+			deps.dagr?.note(name, `stranded — ${ev.reason}`);
 			return false;
 		}
 
 		// cierre definitivo: settled sin keepOpen, o gone
+		deps.dagr?.[ev.kind === "gone" ? "gone" : "settled"](name, ev.kind === "gone" ? ev.reason : ev.state);
 		let cleanupNote = "";
 		if (rec.worktree) {
 			const w = rec.worktree;

@@ -292,3 +292,69 @@ describe("formatEvent", () => {
 		expect(formatEvent("a", { kind: "stranded", reason: "wait exited 3" })).toBe("[a] stranded — wait exited 3");
 	});
 });
+
+describe("makeSettleHandler — grabado dagr (spec 005 D0)", () => {
+	function dagrFake() {
+		const calls: { what: string; arg?: unknown }[] = [];
+		return {
+			calls,
+			hook: {
+				reserve: () => undefined,
+				born: () => undefined,
+				release: () => undefined,
+				childrenExempt: false,
+				prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
+				blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
+				settled: (a: string, s: string) => calls.push({ what: "settled", arg: [a, s] }),
+				gone: (a: string, r?: string) => calls.push({ what: "gone", arg: [a, r] }),
+				canceled: (a: string, r?: string) => calls.push({ what: "canceled", arg: [a, r] }),
+				note: (a: string, d: string) => calls.push({ what: "note", arg: [a, d] }),
+			},
+		};
+	}
+
+	it("blocked/settled/keepOpen/gone/stranded llaman al hook con el agente", async () => {
+		const dagr = dagrFake();
+		const registry = new Registry();
+		registry.add(baseRec({ agent: "a1" }));
+		registry.add(baseRec({ agent: "a2", keepOpen: true }));
+		const { run } = fakeRun({ "tab close": ok('{"result":{"type":"ok"}}') });
+		const handler = makeSettleHandler({
+			run,
+			registry,
+			emit: () => {},
+			cleanupWorktree: async () => ({ removed: true }),
+			dagr: dagr.hook,
+		});
+		await handler("a1", { kind: "blocked" });
+		await handler("a2", { kind: "settled", state: "done", output: "r1" });
+		await handler("a1", { kind: "settled", state: "idle", output: "fin" });
+		registry.adopt(baseRec({ agent: "a3" }));
+		await handler("a3", { kind: "gone", reason: "pane cerrado" });
+		registry.adopt(baseRec({ agent: "a4" }));
+		await handler("a4", { kind: "stranded", reason: "wait murió" });
+		const whats = dagr.calls.map((c) => c.what);
+		expect(whats).toEqual(["blocked", "settled", "settled", "gone", "note"]);
+		expect(dagr.calls[1]!.arg).toEqual(["a2", "done"]);
+		expect(String(dagr.calls[3]!.arg)).toContain("pane cerrado");
+		expect(String(dagr.calls[4]!.arg)).toContain("stranded");
+	});
+
+	it("record cerrado/desconocido → hook NO llamado", async () => {
+		const dagr = dagrFake();
+		const registry = new Registry();
+		registry.add(baseRec({ agent: "a1", status: "closed" }));
+		const { run } = fakeRun({ "tab close": ok('{"result":{"type":"ok"}}') });
+		const handler = makeSettleHandler({ run, registry, emit: () => {}, cleanupWorktree: async () => ({ removed: true }), dagr: dagr.hook });
+		await handler("a1", { kind: "settled", state: "idle", output: "x" });
+		await handler("nadie", { kind: "settled", state: "idle", output: "x" });
+		expect(dagr.calls).toHaveLength(0);
+	});
+
+	it("sin hook: comportamiento intacto (regresión A5)", async () => {
+		const { handler, emitted } = setup();
+		const again = await handler("impl-x", { kind: "settled", state: "idle", output: "ok" });
+		expect(again).toBe(false);
+		expect(emitted).toHaveLength(1);
+	});
+});

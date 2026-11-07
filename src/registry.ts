@@ -11,6 +11,7 @@ import type { ChildProcess } from "node:child_process";
 import { armWatcher, type WaitPhase } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
 import { nameSet } from "./slug.ts";
+import type { DagrHook } from "./dagr.ts";
 
 export interface DispatchRecord {
 	agent: string;
@@ -115,6 +116,8 @@ export interface ReconcileDeps {
 	settleFor: () => SettleHandler;
 	emit: EmitFn;
 	cleanupWorktree: CleanupWorktreeFn;
+	/** Grabado dagr (spec 005): muertos en reconcile → gone. */
+	dagr?: DagrHook;
 }
 
 /**
@@ -139,6 +142,7 @@ export async function reconcile(deps: ReconcileDeps): Promise<string[]> {
 		}
 		// muerto: cleanup de worktree pendiente UNA vez, luego closed (sin close:
 		// el agente y su pane ya no existen)
+		deps.dagr?.gone(rec.agent, "reconciled: agent absent");
 		await abandonDispatch(deps, rec, false);
 	}
 	return reArmed;
@@ -175,6 +179,8 @@ export interface CleanupDeps {
 	run: RunFn;
 	registry: Registry;
 	cleanupWorktree: CleanupWorktreeFn;
+	/** Grabado dagr (spec 005 D0): stop/shutdown → canceled. */
+	dagr?: DagrHook;
 }
 
 /** herdr_stop: abandona ya — cleanup worktree + close + markClosed. */
@@ -183,6 +189,7 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
 	if (!rec) throw new Error(`pi-herdr: despacho "${agent}" no encontrado. Usa herdr_agents para listar.`);
 	if (rec.status === "closed") throw new Error(`pi-herdr: "${agent}" ya está cerrado.`);
 	const closeErr = await abandonDispatch(deps, rec);
+	deps.dagr?.canceled(agent, "herdr_stop");
 	if (closeErr) {
 		// issue #9: jamás afirmar 'cerrado' si el close falló — la tab puede seguir abierta
 		return `Despacho ${agent} detenido; ojo: close de ${rec.topology} ${rec.targetId} falló — ${closeErr.message}. Revisa la tab a mano.`;
@@ -204,5 +211,6 @@ export async function shutdownCleanup(deps: CleanupDeps): Promise<void> {
 	for (const rec of deps.registry.list()) {
 		if (rec.status !== "live") continue;
 		await abandonDispatch(deps, rec);
+		deps.dagr?.canceled(rec.agent, "fin de sesión");
 	}
 }
