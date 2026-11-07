@@ -64,14 +64,44 @@ function validate(raw: unknown): { defaults: DispatchDefaults; warnings: string[
 	return { defaults: out, warnings };
 }
 
-export function loadDefaults(path: string): { defaults: DispatchDefaults; warnings: string[] } {
-	if (!existsSync(path)) return { defaults: {}, warnings: [] };
+/** Flags del auto-grafo (spec 005 D5): on por defecto, top-level del JSON. */
+export interface DagrFlags {
+	enabled: boolean;
+	children: boolean;
+	/** Origen de cada flag para /herdr ("config" si se fijó explícitamente). */
+	origin: { enabled: "config" | "builtin"; children: "config" | "builtin" };
+}
+
+export function loadDefaults(path: string): { defaults: DispatchDefaults; warnings: string[]; dagr: DagrFlags } {
+	if (!existsSync(path)) return { defaults: {}, warnings: [], dagr: { enabled: true, children: true, origin: { enabled: "builtin", children: "builtin" } } };
+	let parsed: { defaults?: unknown; herdr_dagr?: unknown; herdr_dagr_children?: unknown };
 	try {
-		const parsed = JSON.parse(readFileSync(path, "utf8")) as { defaults?: unknown };
-		return validate(parsed?.defaults ?? {});
+		parsed = JSON.parse(readFileSync(path, "utf8")) as typeof parsed;
 	} catch {
-		return { defaults: {}, warnings: [`config ilegible (${path}) — se ignora`] };
+		return {
+			defaults: {},
+			warnings: [`config ilegible (${path}) — se ignora`],
+			dagr: { enabled: true, children: true, origin: { enabled: "builtin", children: "builtin" } },
+		};
 	}
+	const { defaults, warnings } = validate(parsed?.defaults ?? {});
+	const flag = (v: unknown, key: string): { value: boolean; origin: "config" | "builtin" } => {
+		if (v === undefined) return { value: true, origin: "builtin" };
+		if (typeof v === "boolean") return { value: v, origin: "config" };
+		warnings.push(`${key}: valor no válido (${JSON.stringify(v)}) — se ignora`);
+		return { value: true, origin: "builtin" };
+	};
+	const enabled = flag(parsed?.herdr_dagr, "herdr_dagr");
+	const children = flag(parsed?.herdr_dagr_children, "herdr_dagr_children");
+	return {
+		defaults,
+		warnings,
+		dagr: {
+			enabled: enabled.value,
+			children: children.value,
+			origin: { enabled: enabled.origin, children: children.origin },
+		},
+	};
 }
 
 /**

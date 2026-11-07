@@ -18,7 +18,7 @@ function tmpPath(): string {
 describe("loadDefaults", () => {
 	it("fichero inexistente → {} sin warnings", () => {
 		const r = loadDefaults(join(tmpPath(), "..", "no-existe.json"));
-		expect(r).toEqual({ defaults: {}, warnings: [] });
+		expect(r).toEqual({ defaults: {}, warnings: [], dagr: { enabled: true, children: true, origin: { enabled: "builtin", children: "builtin" } } });
 	});
 	it("JSON roto → warning, nunca throw", () => {
 		const p = tmpPath();
@@ -67,7 +67,10 @@ describe("saveDefaults / roundtrip", () => {
 		const d: DispatchDefaults = { skills: true, extensions: ["pi-monitor"], topology: "pane", kind: "pi", keepOpen: false, worktree: true };
 		saveDefaults(p, d);
 		expect(readFileSync(p, "utf8").endsWith("\n")).toBe(true);
-		expect(loadDefaults(p)).toEqual({ defaults: d, warnings: [] });
+		const { defaults, warnings, dagr } = loadDefaults(p);
+		expect(defaults).toEqual(d);
+		expect(warnings).toEqual([]);
+		expect(dagr).toEqual({ enabled: true, children: true, origin: { enabled: "builtin", children: "builtin" } });
 	});
 	it("save vacía = reset total", () => {
 		const p = tmpPath();
@@ -98,5 +101,32 @@ describe("mergeInput — param > config > builtin", () => {
 	it("param [] cuenta como explícito → false", () => {
 		const r = mergeInput({ skills: [] }, { skills: ["a"] });
 		expect(r.skills).toEqual([]);
+	});
+});
+
+describe("loadDefaults — flags dagr (spec 005 D5)", () => {
+	it("sin claves → enabled/children true (on por defecto)", () => {
+		const p = tmpPath();
+		expect(loadDefaults(p).dagr).toMatchObject({ enabled: true, children: true });
+	});
+	it("herdr_dagr:false apaga; herdr_dagr_children:false quita la exención", () => {
+		const p = tmpPath();
+		writeFileSync(p, JSON.stringify({ defaults: {}, herdr_dagr: false, herdr_dagr_children: false }));
+		expect(loadDefaults(p).dagr).toMatchObject({ enabled: false, children: false });
+	});
+	it("valores no boolean → warning + default true", () => {
+		const p = tmpPath();
+		writeFileSync(p, JSON.stringify({ defaults: {}, herdr_dagr: "no", herdr_dagr_children: 3 }));
+		const { dagr, warnings } = loadDefaults(p);
+		expect(dagr).toMatchObject({ enabled: true, children: true });
+		expect(warnings.join("\n")).toMatch(/herdr_dagr/);
+		expect(warnings.join("\n")).toMatch(/herdr_dagr_children/);
+	});
+	it("defaults existentes siguen intactos junto a los flags", () => {
+		const p = tmpPath();
+		writeFileSync(p, JSON.stringify({ defaults: { topology: "pane" }, herdr_dagr: false }));
+		const { defaults, dagr } = loadDefaults(p);
+		expect(defaults).toEqual({ topology: "pane" });
+		expect(dagr.enabled).toBe(false);
 	});
 });

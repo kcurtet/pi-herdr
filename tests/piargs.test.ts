@@ -97,3 +97,44 @@ describe("buildPiArgs", () => {
 		expect(() => buildPiArgs(r({ extensions: ["zzz"] }), d)).toThrow(/zzz/);
 	});
 });
+
+describe("buildPiArgs — auto-exención de pi-herdr en hijos (spec 005 D2b)", () => {
+	it("exemptExtensions con extensions false → -e pi-herdr tras la de estado", () => {
+		const d = dirs(true);
+		mkdirSync(join(d.extensions, "pi-herdr"), { recursive: true });
+		writeFileSync(join(d.extensions, "pi-herdr", "index.ts"), "// herdr");
+		expect(buildPiArgs(r({}), d, { exemptExtensions: ["pi-herdr"] })).toEqual([
+			"--no-skills",
+			"--no-extensions",
+			"-e",
+			d.stateExt,
+			"-e",
+			join(d.extensions, "pi-herdr", "index.ts"),
+		]);
+	});
+	it("extensions lista + exempt → dedup si el usuario ya la pidió", () => {
+		const d = dirs(true);
+		const entry = join(d.extensions, "pi-herdr", "index.ts");
+		mkdirSync(join(d.extensions, "pi-herdr"), { recursive: true });
+		writeFileSync(entry, "// herdr");
+		const args = buildPiArgs(r({ extensions: ["pi-herdr"] }), d, { exemptExtensions: ["pi-herdr"] });
+		expect(args.filter((a) => a === entry).length).toBe(1);
+		expect(args.at(-1)).toBe(entry);
+	});
+	it("extensions:true → SIN exención (herencia natural, intacto)", () => {
+		const d = dirs(true);
+		mkdirSync(join(d.extensions, "pi-herdr"), { recursive: true });
+		writeFileSync(join(d.extensions, "pi-herdr", "index.ts"), "// herdr");
+		expect(buildPiArgs(r({ extensions: true }), d, { exemptExtensions: ["pi-herdr"] })).toEqual(["--no-skills"]);
+	});
+	it("exempt irresoluble (no instalado) → se omite en silencio", () => {
+		const d = dirs(true);
+		expect(buildPiArgs(r({}), d, { exemptExtensions: ["pi-herdr"] })).toEqual(["--no-skills", "--no-extensions", "-e", d.stateExt]);
+	});
+	it("sin opts → args idénticos a hoy (regresión)", () => {
+		const d = dirs(true);
+		mkdirSync(join(d.extensions, "pi-herdr"), { recursive: true });
+		writeFileSync(join(d.extensions, "pi-herdr", "index.ts"), "// herdr");
+		expect(buildPiArgs(r({}), d)).toEqual(["--no-skills", "--no-extensions", "-e", d.stateExt]);
+	});
+});
