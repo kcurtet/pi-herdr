@@ -104,6 +104,28 @@ describe("runSetup", () => {
 		});
 	});
 
+	it("cola del mutex: elapsedMs ES wall-clock desde entrada (incluye espera) y queuedMs la desglosa (minor 4, issue #18)", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		let held = false;
+		const run: RunFn = async () => {
+			if (!held) {
+				held = true; // la primera llamada retiene el mutex hasta release
+				await gate;
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		};
+		const first = runSetup(run, { command: "npm ci", cwd: "/w" });
+		await new Promise((r) => setTimeout(r, 120)); // segunda entra mientras la primera retiene
+		const second = runSetup(run, { command: "pnpm i", cwd: "/w2" });
+		await new Promise((r) => setTimeout(r, 40));
+		release();
+		const [r1, r2] = await Promise.all([first, second]);
+		expect(r1.queuedMs).toBeLessThan(120); // la primera no esperó
+		expect(r2.queuedMs).toBeGreaterThanOrEqual(40); // la segunda esperó hasta el release (≥ su post-entrada)
+		expect(r2.elapsedMs).toBeGreaterThanOrEqual(r2.queuedMs); // percibido = ejecución + cola
+	});
+
 	it("SETUP_TIMEOUT_MS default = 10 min (spec R8)", () => {
 		expect(SETUP_TIMEOUT_MS).toBe(600_000);
 	});

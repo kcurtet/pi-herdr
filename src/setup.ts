@@ -83,16 +83,20 @@ export function serializeSetup<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Ejecuta el setup: `bash -c <command>` oculto en cwd (dir del worktree), con
- * timeout propio. Éxito → { elapsedMs }. Fallo (exit != 0 o timeout) → throw
- * con comando + motivo + tail de salida (output parcial del Error en timeout,
- * adjuntado por localRun).
+ * timeout propio. Éxito → { elapsedMs, queuedMs }: elapsedMs es wall-clock
+ * DESDE LA ENTRADA a runSetup — incluye la espera del mutex (spec D6), porque
+ * es el tiempo que el usuario percibe; queuedMs desglosa esa espera (minor 4,
+ * issue #18). Fallo (exit != 0 o timeout) → throw con comando + motivo + tail
+ * de salida (output parcial del Error en timeout, adjuntado por localRun).
  */
 export async function runSetup(
 	run: RunFn,
 	o: { command: string; cwd: string; timeoutMs?: number },
-): Promise<{ elapsedMs: number }> {
+): Promise<{ elapsedMs: number; queuedMs: number }> {
+	const entered = Date.now();
 	return serializeSetup(async () => {
 		const start = Date.now();
+		const queuedMs = start - entered;
 		let result: { code: number; stdout: string; stderr: string };
 		try {
 			result = await run("bash", ["-c", o.command], {
@@ -112,6 +116,6 @@ export async function runSetup(
 				`pi-herdr: setup "${o.command}" falló (exit ${result.code})\n${tailOf(result.stderr, result.stdout)}`,
 			);
 		}
-		return { elapsedMs: Date.now() - start };
+		return { elapsedMs: Date.now() - entered, queuedMs };
 	});
 }

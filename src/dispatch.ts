@@ -249,8 +249,14 @@ async function dispatchArmed(
 	let setupNote: string | undefined;
 	if (worktree !== undefined && setupCommand !== undefined) {
 		try {
-			const { elapsedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
-			setupNote = `setup OK (${setupCommand}, ${Math.round(elapsedMs / 1000)}s)`;
+			// elapsedMs incluye la espera del mutex (wall-clock percibido, minor 4
+			// issue #18): la nota desglosa la cola solo cuando fue material (≥1s)
+			const { elapsedMs, queuedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
+			const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
+			setupNote =
+				queuedMs >= 1_000
+					? `setup OK (${setupCommand}, ${secs(elapsedMs)} — ${secs(queuedMs)} esperando otro setup)`
+					: `setup OK (${setupCommand}, ${secs(elapsedMs)})`;
 		} catch (err) {
 			// spec 003 D4: aún no hay topología ni agente — solo rollback del
 			// worktree, conservador (rollbackNote: wording compartido con agentStart)
