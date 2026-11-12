@@ -16,7 +16,7 @@ import {
 } from "./herdr.ts";
 import { liveNames, resolveName, withSuffix } from "./slug.ts";
 import { firstLine } from "./dagrdoc.ts";
-import { armWatcher, type WaitPhase } from "./watch.ts";
+import { armWatcher, type WaitPhase, type WatchHandle } from "./watch.ts";
 import { Registry, type DispatchRecord } from "./registry.ts";
 import { createWorktree, resolveRepoRoot, rollbackNote, type WorktreeRef } from "./worktree.ts";
 import { detectSetupCommand, LOCKFILE_COMMANDS, parseSetupMode, runSetup } from "./setup.ts";
@@ -70,6 +70,11 @@ export interface DispatchDeps {
 	getConfig: () => DispatchDefaults;
 	/** Grabado del grafo dagr (spec 005); ausente = dagr off, tools idénticas. */
 	dagr?: DagrHook;
+	/** Map de watchers de la sesión (solo lectura, issue #17): herdr_prompt
+	 * informa según vigilancia REAL — un record live restaurado sin watcher
+	 * (reconcile fallido, I4 rev #13) no debe oír "el watcher activo notificará".
+	 * Ausente = asume vigilado (compat con seams de test sin wiring). */
+	watchers?: ReadonlyMap<string, WatchHandle>;
 }
 
 /** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
@@ -125,6 +130,11 @@ export async function promptAgent(deps: DispatchDeps, name: string, text: string
 		return `El agente ${name} está bloqueado esperando aprobación o input: decide en su pane (visible en herdr) y vuelve a promptear después.`;
 	}
 	deps.dagr?.prompt(name, text);
+	// issue #17: mensaje honesto según vigilancia real — membership en el map
+	// equivale a watcher vivo (trackedSettle/stopDispatch sueltan los muertos)
+	if (deps.watchers !== undefined && !deps.watchers.has(name)) {
+		return `Prompt enviado a ${name}. Ojo: este despacho está SIN watcher — el próximo settle NO llegará como evento; sigue su salida con herdr_read y ciérralo con herdr_stop.`;
+	}
 	return `Prompt enviado a ${name}. El watcher activo notificará el próximo settle; no re-armes nada.`;
 }
 

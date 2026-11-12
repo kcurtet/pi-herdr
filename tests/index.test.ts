@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { Registry, shutdownCleanup, stopAgent, stopDispatch, type DispatchRecord } from "../src/registry.ts";
+import type { WatchHandle } from "../src/watch.ts";
 import extension from "../index.ts";
 import { fakeRun, fx, ok, waitFor } from "./helpers.ts";
 
@@ -128,7 +129,7 @@ describe("stopAgent (herdr_stop)", () => {
 describe("stopDispatch (herdr_stop wiring)", () => {
 	it("para el watcher ANTES de cerrar, con el mismo registro de despacho", async () => {
 		const order: string[] = [];
-		const watchers = new Map<string, { stop(): void }>();
+		const watchers = new Map<string, WatchHandle>();
 		watchers.set("impl-x", { stop() { order.push("watcher"); } });
 		const registry = new Registry();
 		registry.add(rec());
@@ -140,6 +141,19 @@ describe("stopDispatch (herdr_stop wiring)", () => {
 		expect(order).toEqual(["watcher", "close"]);
 		expect(registry.get("impl-x")!.status).toBe("closed");
 		expect(msg).toMatch(/impl-x/);
+	});
+
+	it("borra el handle del map: el watcher parado no queda huérfano (issue #17)", async () => {
+		let stopped = 0;
+		const watchers = new Map<string, WatchHandle>();
+		watchers.set("impl-x", { stop() { stopped++; } });
+		const registry = new Registry();
+		registry.add(rec());
+		const { run } = fakeRun(closeRoutes);
+		const msg = await stopDispatch({ run, registry, cleanupWorktree: noCleanup, watchers }, "impl-x");
+		expect(stopped).toBe(1);
+		expect(watchers.has("impl-x")).toBe(false);
+		expect(msg).toMatch(/detenido y tab cerrado/);
 	});
 });
 

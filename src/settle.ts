@@ -48,12 +48,20 @@ export function formatEvent(name: string, ev: WatchEvent): string {
 /** Envuelve un settle handler para el map de watchers de la sesión (index.ts).
  * M5 (issue #13): en cierre definitivo (handler false — settled sin keepOpen,
  * gone o record ya cerrado) el handle sale del map; si no, los handles muertos
- * viven toda la sesión. blocked/keepOpen devuelven true y el handle queda. */
+ * viven toda la sesión. blocked/keepOpen devuelven true y el handle queda.
+ * Issue #17: si el handler LANZA, watch.ts deliver lo captura y mata el
+ * watcher — sin este catch el handle moriría igual pero quedaría huérfano en
+ * el map (fuga); se suelta y el throw sigue su camino. */
 export function trackedSettle(inner: SettleHandler, watchers: Map<string, WatchHandle>): SettleHandler {
 	return async (name, ev) => {
-		const again = await inner(name, ev);
-		if (!again) watchers.delete(name);
-		return again;
+		try {
+			const again = await inner(name, ev);
+			if (!again) watchers.delete(name);
+			return again;
+		} catch (err) {
+			watchers.delete(name);
+			throw err;
+		}
 	};
 }
 

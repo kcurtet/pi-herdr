@@ -104,6 +104,28 @@ const baseRecord: import("../src/registry.ts").DispatchRecord = {
 		expect(msg).toMatch(/impl-x/);
 		expect(armedWith).toHaveLength(0);
 	});
+
+	it("record live restaurado SIN watcher: el mensaje NO promete notificación de settle (issue #17)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		deps.watchers = new Map(); // reconcile fallido (I4, rev #13): live sin watcher
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toMatch(/Prompt enviado a impl-x/);
+		expect(msg).not.toMatch(/watcher activo notificar/);
+		expect(msg).toMatch(/SIN watcher/i);
+	});
+
+	it("con watcher en el map: mantiene la guía de no re-armar (issue #17)", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add(baseRecord);
+		deps.watchers = new Map([["impl-x", { stop() {} }]]);
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toMatch(/watcher activo notificar/);
+	});
 });
 
 describe("herdr_read", () => {

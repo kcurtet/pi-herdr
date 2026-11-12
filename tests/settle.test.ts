@@ -266,6 +266,15 @@ describe("trackedSettle — el map de watchers suelta el handle en cierre defini
 		expect(watchers.has("impl-x")).toBe(true);
 	});
 
+	it("handler que lanza → el handle sale del map igualmente (issue #17: deliver mata el watcher con el throw)", async () => {
+		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
+		const wrapped = trackedSettle(async () => {
+			throw new Error("boom del handler");
+		}, watchers);
+		await expect(wrapped("impl-x", { kind: "settled", state: "idle", output: "" })).rejects.toThrow("boom del handler");
+		expect(watchers.has("impl-x")).toBe(false);
+	});
+
 	it("agente sin handle en el map: delete no-op, no lanza", async () => {
 		const wrapped = trackedSettle(async () => false, new Map<string, WatchHandle>());
 		await expect(wrapped("fantasma", { kind: "gone", reason: "x" })).resolves.toBe(false);

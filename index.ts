@@ -172,6 +172,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		settleFor: () => trackedSettle(makeSettleHandler({ run, registry, emit, cleanupWorktree, dagr: dagrHook }), watchers),
 		resourceDirs,
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
+		watchers, // issue #17: herdr_prompt informa según vigilancia real del map
 		dagr: dagrHook,
 		...inject,
 	};
