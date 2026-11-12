@@ -129,6 +129,153 @@ const baseRecord: import("../src/registry.ts").DispatchRecord = {
 	});
 });
 
+describe("herdr_prompt — interrupt (spec 006)", () => {
+	/** Route `agent get` con el estado que queramos ver. */
+	const getRoute = (status: string) =>
+		ok(`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`);
+	const sendKeysOk = ok('{"result":{"type":"ok"}}');
+
+	it("agente working: calls en orden prompt→get→send-keys con key esc, grace seteado, respuesta menciona la interrupción (GWT1/R1)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "para el test y reporta", true);
+		expect(calls.map((c) => c.args.slice(0, 2).join(" "))).toEqual(["agent prompt", "agent get", "agent send-keys"]);
+		expect(calls[2]!.args).toEqual(["agent", "send-keys", "impl-x", "esc"]);
+		expect(registry.get("impl-x")!.interruptGrace).toBe(true);
+		expect(msg).toMatch(/esc enviado/);
+		expect(msg).toMatch(/interrupted/); // aviso del grace: settle sin recovery NO cierra
+	});
+
+	it("agente idle: cero send-keys, SIN grace, respuesta 'no estaba trabajando' (GWT2/R2)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("idle"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "sigue", true);
+		expect(calls.filter((c) => c.args[1] === "send-keys")).toHaveLength(0);
+		expect(registry.get("impl-x")!.interruptGrace).toBeUndefined();
+		expect(msg).toMatch(/no estaba trabajando \(idle\)/);
+		expect(msg).not.toMatch(/esc enviado/);
+	});
+
+	it("prompt rechazado con agent_blocked: mensaje blocked actual, cero send-keys y cero get (GWT3/R3)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent prompt": { code: 1, stdout: "", stderr: "agent_blocked" },
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "sigue", true);
+		expect(msg).toMatch(/aprobaci/i);
+		expect(calls.filter((c) => c.args[1] !== "prompt")).toHaveLength(0);
+		expect(registry.get("impl-x")!.interruptGrace).toBeUndefined();
+	});
+
+	it("send-keys exit 1: SIN throw; prompt encolado + fallo con hint de reintento; SIN grace (GWT4/R4)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": { code: 1, stdout: "", stderr: "boom-keys" },
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "sigue", true);
+		expect(msg).toMatch(/encolado/);
+		expect(msg).toMatch(/falló.*boom-keys/s);
+		expect(msg).toMatch(/reintenta/i);
+		expect(registry.get("impl-x")!.interruptGrace).toBeUndefined();
+		expect(calls.filter((c) => c.args[1] === "send-keys")).toHaveLength(1);
+	});
+
+	it("agent get falla: SIN esc (solo un working verificado se interrumpe), respuesta honesta con el error", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": { code: 1, stdout: "", stderr: "boom-get" },
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "sigue", true);
+		expect(msg).toMatch(/Prompt enviado/);
+		expect(msg).toMatch(/no se pudo verificar/i);
+		expect(calls.filter((c) => c.args[1] === "send-keys")).toHaveLength(0);
+		expect(registry.get("impl-x")!.interruptGrace).toBeUndefined();
+	});
+
+	it("despacho live SIN watcher: esc enviado + nota sin-watcher de #17 en la respuesta (GWT11/R10)", async () => {
+		const { run } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		deps.watchers = new Map(); // live sin watcher (I4, rev #13)
+		const msg = await promptAgent(deps, "impl-x", "sigue", true);
+		expect(msg).toMatch(/esc enviado/);
+		expect(msg).toMatch(/SIN watcher/i);
+	});
+
+	it("agente desconocido o cerrado con interrupt: errores actuales intactos, CERO calls (GWT12/R10)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		await expect(promptAgent(deps, "fantasma", "x", true)).rejects.toThrow(/no encontrado.*herdr_agents/s);
+		registry.add({ ...baseRecord, agent: "viejo", status: "closed" });
+		await expect(promptAgent(deps, "viejo", "x", true)).rejects.toThrow(/herdr_dispatch/);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("doble interrupt con grace ya activo: re-set idempotente (caso límite)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		await promptAgent(deps, "impl-x", "ronda 1", true);
+		await promptAgent(deps, "impl-x", "ronda 2", true);
+		expect(calls.filter((c) => c.args[1] === "send-keys")).toHaveLength(2);
+		expect(registry.get("impl-x")!.interruptGrace).toBe(true);
+	});
+
+	it("sin interrupt: respuesta y calls byte-idénticos a hoy — ni get ni send-keys (objetivo 5)", async () => {
+		const { run, calls } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": sendKeysOk,
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const msg = await promptAgent(deps, "impl-x", "sigue");
+		expect(msg).toBe("Prompt enviado a impl-x. El watcher activo notificará el próximo settle; no re-armes nada.");
+		expect(calls.map((c) => c.args[1])).toEqual(["prompt"]);
+	});
+});
+
 describe("herdr_read", () => {
 	it("passthrough de agentRead con lines default 200", async () => {
 		const { run, calls } = fakeRun({ ...routes, "agent read": ok("texto del agente") });

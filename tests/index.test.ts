@@ -293,6 +293,17 @@ describe("factory de la extensión", () => {
 		expect(required).toContain("task");
 	});
 
+	it("schema de herdr_prompt: interrupt opcional boolean (spec 006 D2)", () => {
+		const { api, tools } = fakeApi();
+		extension(api as never);
+		const t = tools.find((x) => x.name === "herdr_prompt")!;
+		const props = (t.parameters as { properties: Record<string, { type?: string }>; required?: string[] }).properties;
+		expect(props.interrupt?.type).toBe("boolean");
+		expect(props.agent?.type).toBe("string");
+		expect(props.text?.type).toBe("string");
+		expect((t.parameters as { required?: string[] }).required).toEqual(["agent", "text"]);
+	});
+
 	describe("session_start — reconcile tras resume (I4, issue #13)", () => {
 		const liveEntry = {
 			type: "custom",

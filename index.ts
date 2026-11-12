@@ -55,6 +55,12 @@ const PromptParams = Type.Object(
 	{
 		agent: Type.String({ description: "Nombre del agente (despacho vivo de esta sesión)." }),
 		text: Type.String({ description: "Prompt para la siguiente ronda." }),
+		interrupt: Type.Optional(
+			Type.Boolean({
+				description:
+				"true: además de encolar el texto como steering, si el agente está working se envía esc a su pane (abort del tool call en curso; pi: app.interrupt) para que el steering arranque ya. Jamás ctrl+c (en pi borra el input o mata al agente). Tras un esc con éxito, un settle sin recovery NO cierra el despacho (evento interrupted + tu decisión). Default false.",
+			}),
+		),
 	},
 	{ $id: "HerdrPromptParams" },
 );
@@ -233,12 +239,14 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	pi.registerTool({
 		name: "herdr_prompt",
 		label: "Herdr Prompt",
-		description: "Envía otra ronda de prompt a un agente despachado y aún vivo de esta sesión.",
+		description:
+			"Envía otra ronda de prompt a un agente despachado y aún vivo de esta sesión. " +
+			"Con interrupt:true, si el agente está working se interrumpe además el tool call en curso (esc) para que el steering encolado se procese ya: prompt+esc es una operación atómica.",
 		parameters: PromptParams,
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 		execute: async (_id, params) => {
-			const text = await promptAgent(deps, params.agent, params.text);
-			return { content: [{ type: "text", text }], details: { agent: params.agent } };
+			const text = await promptAgent(deps, params.agent, params.text, params.interrupt ?? false);
+			return { content: [{ type: "text", text }], details: { agent: params.agent, interrupt: params.interrupt ?? false } };
 		},
 	});
 
