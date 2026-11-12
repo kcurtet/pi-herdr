@@ -37,13 +37,17 @@ export const localRun: RunFn = async (file, args, opts) => {
 	} catch (err) {
 		const e = err as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
 		if (e.killed) {
-			// spec 003 (D3/D4): preservar la salida parcial capturada para el tail de setup
+			// spec 003 (D3/D4): preservar la salida parcial capturada para el tail de
+			// setup; `timedOut` es el marcador del contrato (runSetup distingue el
+			// timeout de una RunFn inyectada que lance otra cosa — minor 3, issue #18)
 			const err = new Error(`herdr: timeout ejecutando \`${file} ${args.join(" ")}\``) as Error & {
 				stdout?: string;
 				stderr?: string;
+				timedOut?: boolean;
 			};
 			err.stdout = e.stdout ?? "";
 			err.stderr = e.stderr ?? "";
+			err.timedOut = true;
 			throw err;
 		}
 		// ENOENT (herdr no instalado) o exit != 0: superficie uniforme para arriba

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { localRun } from "../src/herdr.ts";
+import { localRun, type RunFn } from "../src/herdr.ts";
 import { fakeRun, ok, waitFor } from "./helpers.ts";
 import {
 	detectSetupCommand,
@@ -134,6 +134,17 @@ describe("runSetup", () => {
 		expect(err.message).toContain("(timeout)");
 		expect(err.message).toContain("lento-pre-kill");
 	}, 10_000);
+
+	it("RunFn out-of-contract que lanza: NO se etiqueta timeout, surfacea la excepción (minor 3, issue #18)", async () => {
+		const boom: RunFn = async () => {
+			throw new Error("ENOTENOKEOF");
+		};
+		const err = await runSetup(boom, { command: "npm ci", cwd: "/w" }).catch((e) => e);
+		expect(err.message).not.toContain("(timeout)");
+		expect(err.message).toContain("excepción");
+		expect(err.message).toContain("ENOTENOKEOF");
+		expect(err.message).toContain('setup "npm ci"');
+	});
 });
 
 describe("serializeSetup", () => {

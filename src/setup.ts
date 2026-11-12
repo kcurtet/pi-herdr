@@ -100,9 +100,12 @@ export async function runSetup(
 				timeoutMs: o.timeoutMs ?? SETUP_TIMEOUT_MS,
 			});
 		} catch (err) {
-			// timeout de la RunFn: Error con stdout/stderr parciales adjuntos (T1)
-			const e = err as Error & { stdout?: string; stderr?: string };
-			throw new Error(`pi-herdr: setup "${o.command}" falló (timeout)\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
+			// localRun SOLO lanza en timeout (Error con stdout/stderr parciales y flag
+			// `timedOut`, T1). Una RunFn inyectada que lance otra cosa es out-of-contract:
+			// se distingue por el flag, no se etiqueta a ciegas (minor 3, issue #18)
+			const e = err as Error & { stdout?: string; stderr?: string; timedOut?: boolean };
+			const reason = e.timedOut === true ? "timeout" : `excepción: ${e.message}`;
+			throw new Error(`pi-herdr: setup "${o.command}" falló (${reason})\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
 		}
 		if (result.code !== 0) {
 			throw new Error(
