@@ -8,7 +8,7 @@ import { agentList, closeTarget, type RunFn } from "./herdr.ts";
 import type { SettleHandler } from "./settle.ts";
 import type { EmitFn, CleanupWorktreeFn } from "./settle.ts";
 import type { ChildProcess } from "node:child_process";
-import { armWatcher, type WaitPhase } from "./watch.ts";
+import { armWatcher, type WaitPhase, type WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
 import { nameSet } from "./slug.ts";
 import type { DagrHook } from "./dagr.ts";
@@ -201,7 +201,7 @@ export async function stopAgent(deps: CleanupDeps, agent: string): Promise<strin
  * Issue #17: el handle parado sale del map — sin esto queda huérfano aunque
  * ya no vigila nada (la membresía solo la consultan stopDispatch/prompt). */
 export async function stopDispatch(
-	deps: CleanupDeps & { watchers: Map<string, { stop(): void }> },
+	deps: CleanupDeps & { watchers: Map<string, WatchHandle> },
 	agent: string,
 ): Promise<string> {
 	deps.watchers.get(agent)?.stop();

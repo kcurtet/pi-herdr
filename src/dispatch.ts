@@ -133,7 +133,7 @@ export async function promptAgent(deps: DispatchDeps, name: string, text: string
 	// issue #17: mensaje honesto según vigilancia real — membership en el map
 	// equivale a watcher vivo (trackedSettle/stopDispatch sueltan los muertos)
 	if (deps.watchers !== undefined && !deps.watchers.has(name)) {
-		return `Prompt enviado a ${name}. Ojo: este despacho está SIN watcher (restaurado tras resume sin re-arme) — el próximo settle NO llegará como evento; sigue su salida con herdr_read y ciérralo con herdr_stop.`;
+		return `Prompt enviado a ${name}. Ojo: este despacho está SIN watcher — el próximo settle NO llegará como evento; sigue su salida con herdr_read y ciérralo con herdr_stop.`;
 	}
 	return `Prompt enviado a ${name}. El watcher activo notificará el próximo settle; no re-armes nada.`;
 }
