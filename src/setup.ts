@@ -7,15 +7,13 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { RunFn } from "./herdr.ts";
+import type { RunFailure, RunFn } from "./herdr.ts";
 
 /** Modo resuelto de setupCommand. */
 export type SetupMode =
 	| { kind: "none" }
 	| { kind: "auto" }
 	| { kind: "literal"; command: string };
-
-export type ExistsFn = (path: string) => boolean;
 
 /**
  * Lockfile → comando de instalación. El ORDEN del array es la prioridad
@@ -47,10 +45,12 @@ export function parseSetupMode(setupCommand: string | undefined, worktree: boole
 	return { kind: "literal", command: setupCommand };
 }
 
-/** Pure: primer lockfile conocido (por prioridad) → su comando; undefined si no hay. */
-export function detectSetupCommand(repoRoot: string, exists: ExistsFn = existsSync): string | undefined {
+/** Pure: primer lockfile conocido (por prioridad) → su comando; undefined si no hay.
+ * Sin seam de `exists`: los tests golpean el FS real (tmpdirs), que es el
+ * comportamiento que importa (minor 1, issue #18 — seam sin callers). */
+export function detectSetupCommand(repoRoot: string): string | undefined {
 	for (const { file, command } of LOCKFILE_COMMANDS) {
-		if (exists(join(repoRoot, file))) return command;
+		if (existsSync(join(repoRoot, file))) return command;
 	}
 	return undefined;
 }
@@ -69,6 +69,10 @@ function tailOf(stderr: string, stdout: string): string {
  * Mutex en-proceso (spec D6): los setups de dispatches concurrentes corren uno
  * tras otro. Serializa la EJECUCIÓN, no los fallos: si una setup rechaza, la
  * siguiente arranca igual (queue = next.catch(() => undefined)).
+ *
+ * Exportado pese a no tener callers de producción: es la unidad bajo prueba
+ * del mutex (tests/setup.test.ts) — testearla a través de dispatch sería un
+ * test de integración acoplado al ruido. Ruling minor 2, issue #18.
  */
 let queue: Promise<unknown> = Promise.resolve();
 export function serializeSetup<T>(fn: () => Promise<T>): Promise<T> {
@@ -79,16 +83,20 @@ export function serializeSetup<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Ejecuta el setup: `bash -c <command>` oculto en cwd (dir del worktree), con
- * timeout propio. Éxito → { elapsedMs }. Fallo (exit != 0 o timeout) → throw
- * con comando + motivo + tail de salida (output parcial del Error en timeout,
- * adjuntado por localRun).
+ * timeout propio. Éxito → { elapsedMs, queuedMs }: elapsedMs es wall-clock
+ * DESDE LA ENTRADA a runSetup — incluye la espera del mutex (spec D6), porque
+ * es el tiempo que el usuario percibe; queuedMs desglosa esa espera (minor 4,
+ * issue #18). Fallo (exit != 0 o timeout) → throw con comando + motivo + tail
+ * de salida (output parcial del Error en timeout, adjuntado por localRun).
  */
 export async function runSetup(
 	run: RunFn,
 	o: { command: string; cwd: string; timeoutMs?: number },
-): Promise<{ elapsedMs: number }> {
+): Promise<{ elapsedMs: number; queuedMs: number }> {
+	const entered = Date.now();
 	return serializeSetup(async () => {
 		const start = Date.now();
+		const queuedMs = start - entered;
 		let result: { code: number; stdout: string; stderr: string };
 		try {
 			result = await run("bash", ["-c", o.command], {
@@ -96,15 +104,18 @@ export async function runSetup(
 				timeoutMs: o.timeoutMs ?? SETUP_TIMEOUT_MS,
 			});
 		} catch (err) {
-			// timeout de la RunFn: Error con stdout/stderr parciales adjuntos (T1)
-			const e = err as Error & { stdout?: string; stderr?: string };
-			throw new Error(`pi-herdr: setup "${o.command}" falló (timeout)\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
+			// localRun SOLO lanza en timeout (Error con stdout/stderr parciales y flag
+			// `timedOut`, T1). Una RunFn inyectada que lance otra cosa es out-of-contract:
+			// se distingue por el flag, no se etiqueta a ciegas (minor 3, issue #18)
+			const e = err as RunFailure;
+			const reason = e.timedOut === true ? "timeout" : `excepción: ${e.message}`;
+			throw new Error(`pi-herdr: setup "${o.command}" falló (${reason})\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
 		}
 		if (result.code !== 0) {
 			throw new Error(
 				`pi-herdr: setup "${o.command}" falló (exit ${result.code})\n${tailOf(result.stderr, result.stdout)}`,
 			);
 		}
-		return { elapsedMs: Date.now() - start };
+		return { elapsedMs: Date.now() - entered, queuedMs };
 	});
 }

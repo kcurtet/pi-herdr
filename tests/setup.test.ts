@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { localRun } from "../src/herdr.ts";
-import { fakeRun, ok, waitFor } from "./helpers.ts";
+import { localRun, type RunFn } from "../src/herdr.ts";
+import { deferred, fakeRun, ok, waitFor } from "./helpers.ts";
 import {
 	detectSetupCommand,
 	LOCKFILE_COMMANDS,
@@ -104,6 +104,27 @@ describe("runSetup", () => {
 		});
 	});
 
+	it("cola del mutex: elapsedMs ES wall-clock desde entrada (incluye espera) y queuedMs la desglosa (minor 4, issue #18)", async () => {
+		const { gate, release } = deferred();
+		let held = false;
+		const run: RunFn = async () => {
+			if (!held) {
+				held = true; // la primera llamada retiene el mutex hasta release
+				await gate;
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		};
+		const first = runSetup(run, { command: "npm ci", cwd: "/w" });
+		await new Promise((r) => setTimeout(r, 120)); // segunda entra mientras la primera retiene
+		const second = runSetup(run, { command: "pnpm i", cwd: "/w2" });
+		await new Promise((r) => setTimeout(r, 40));
+		release();
+		const [r1, r2] = await Promise.all([first, second]);
+		expect(r1.queuedMs).toBeLessThan(120); // la primera no esperó
+		expect(r2.queuedMs).toBeGreaterThanOrEqual(40); // la segunda esperó hasta el release (≥ su post-entrada)
+		expect(r2.elapsedMs).toBeGreaterThanOrEqual(r2.queuedMs); // percibido = ejecución + cola
+	});
+
 	it("SETUP_TIMEOUT_MS default = 10 min (spec R8)", () => {
 		expect(SETUP_TIMEOUT_MS).toBe(600_000);
 	});
@@ -134,14 +155,24 @@ describe("runSetup", () => {
 		expect(err.message).toContain("(timeout)");
 		expect(err.message).toContain("lento-pre-kill");
 	}, 10_000);
+
+	it("RunFn out-of-contract que lanza: NO se etiqueta timeout, surfacea la excepción (minor 3, issue #18)", async () => {
+		const boom: RunFn = async () => {
+			throw new Error("ENOTENOKEOF");
+		};
+		const err = await runSetup(boom, { command: "npm ci", cwd: "/w" }).catch((e) => e);
+		expect(err.message).not.toContain("(timeout)");
+		expect(err.message).toContain("excepción");
+		expect(err.message).toContain("ENOTENOKEOF");
+		expect(err.message).toContain('setup "npm ci"');
+	});
 });
 
 describe("serializeSetup", () => {
 	it("la segunda NO arranca hasta que acaba la primera (mutex en-proceso, spec D6)", async () => {
 		const started: string[] = [];
 		const mk = (id: string) => {
-			let release!: () => void;
-			const gate = new Promise<void>((r) => (release = r));
+			const { gate, release } = deferred();
 			return {
 				fn: () =>
 					new Promise<void>((res) => {
@@ -167,8 +198,7 @@ describe("serializeSetup", () => {
 	it("el fallo de la primera no rompe a la segunda (serializa ejecución, no fallos)", async () => {
 		const started: string[] = [];
 		const mk = (id: string, fail: boolean) => {
-			let release!: () => void;
-			const gate = new Promise<void>((r) => (release = r));
+			const { gate, release } = deferred();
 			return {
 				fn: () =>
 					new Promise<void>((res, rej) => {

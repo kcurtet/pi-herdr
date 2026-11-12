@@ -18,11 +18,19 @@ const CONTROL_TIMEOUT_MS = 15_000;
 const START_TIMEOUT_MS = 120_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
 
+/** Contrato de ejecución: devuelve resultado; SOLO lanza en timeout (RunFailure
+ * con salida parcial y `timedOut: true` — ver RunFailure). */
 export type RunFn = (
 	file: string,
 	args: string[],
 	opts?: { cwd?: string; timeoutMs?: number },
 ) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/** Forma del error que lanza una RunFn conforme al contrato: timeout con la
+ * salida parcial capturada y `timedOut: true` (localRun, T1). Una RunFn
+ * inyectada que lance otra cosa es out-of-contract — runSetup la distingue
+ * por el flag, no por la forma (minor 3, issue #18). */
+export type RunFailure = Error & { stdout?: string; stderr?: string; timedOut?: boolean };
 
 /** RunFn real: execFile con timeout y captura de salida. */
 export const localRun: RunFn = async (file, args, opts) => {
@@ -37,13 +45,13 @@ export const localRun: RunFn = async (file, args, opts) => {
 	} catch (err) {
 		const e = err as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
 		if (e.killed) {
-			// spec 003 (D3/D4): preservar la salida parcial capturada para el tail de setup
-			const err = new Error(`herdr: timeout ejecutando \`${file} ${args.join(" ")}\``) as Error & {
-				stdout?: string;
-				stderr?: string;
-			};
+			// spec 003 (D3/D4): preservar la salida parcial capturada para el tail de
+			// setup; `timedOut` es el marcador del contrato (runSetup distingue el
+			// timeout de una RunFn inyectada que lance otra cosa — minor 3, issue #18)
+			const err = new Error(`herdr: timeout ejecutando \`${file} ${args.join(" ")}\``) as RunFailure;
 			err.stdout = e.stdout ?? "";
 			err.stderr = e.stderr ?? "";
+			err.timedOut = true;
 			throw err;
 		}
 		// ENOENT (herdr no instalado) o exit != 0: superficie uniforme para arriba

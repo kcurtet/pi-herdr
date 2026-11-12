@@ -8,7 +8,8 @@ import { saveDefaults, loadDefaults } from "../src/config.ts";
 import { Registry } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
-import { fakeRun, fx, ok } from "./helpers.ts";
+import { deferred, fakeRun, fx, ok } from "./helpers.ts";
+import { serializeSetup } from "../src/setup.ts";
 
 type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
 
@@ -435,6 +436,19 @@ describe("dispatch — worktree", () => {
 		expect(r.worktreePath).toContain(".hd-worktrees");
 	});
 
+	it("setup en cola tras otro setup: la nota desglosa la espera (minor 4, issue #18)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps } = mkSetupDeps({ repoRoot: repo });
+		const { gate, release } = deferred();
+		const held = serializeSetup(() => gate); // retiene el mutex en-proceso (spec D6)
+		const dispatched = dispatch(deps, { task: "revisa el login", worktree: true }, { HERDR_ENV: "1" });
+		await new Promise((r) => setTimeout(r, 1_500)); // el setup del dispatch espera en cola (margen holgado sobre el umbral)
+		release();
+		await held;
+		const r = await dispatched;
+		expect(r.setupNote).toMatch(/setup OK \(pnpm install --frozen-lockfile, \d+s — \d+s esperando otro setup\)/);
+	});
+
 	it("monorepo: cwd en subdir, lockfile en la RAÍZ → detecta igual (foco de revisión 1)", async () => {
 		const repo = tmpRepo(["pnpm-lock.yaml"]);
 		const { deps } = mkSetupDeps({ repoRoot: repo });
@@ -452,6 +466,17 @@ describe("dispatch — worktree", () => {
 		const r = await dispatch(
 			deps,
 			{ task: "revisa el login", worktree: true, setupCommand: "npm install" },
+			{ HERDR_ENV: "1" },
+		);
+		expect(r.setupNote).toMatch(/setup OK \(npm install, \d+s\)/);
+	});
+
+	it("kind≠pi + setupCommand: permitido sin gate (el setup prepara el worktree, no al agente — minor 5, issue #18)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(
+			deps,
+			{ task: "revisa el login", kind: "claude", worktree: true, setupCommand: "npm install" },
 			{ HERDR_ENV: "1" },
 		);
 		expect(r.setupNote).toMatch(/setup OK \(npm install, \d+s\)/);
