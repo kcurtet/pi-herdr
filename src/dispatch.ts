@@ -24,6 +24,9 @@ import { type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
 import type { DagrHook } from "./dagr.ts";
+
+/** Umbral de presentación: desglosar la espera en cola del mutex solo si fue material. */
+const QUEUED_NOTE_THRESHOLD_MS = 1_000;
 import type { SettleHandler } from "./settle.ts";
 
 // re-export por compatibilidad: consumers (y tests) históricamente importan
@@ -250,11 +253,11 @@ async function dispatchArmed(
 	if (worktree !== undefined && setupCommand !== undefined) {
 		try {
 			// elapsedMs incluye la espera del mutex (wall-clock percibido, minor 4
-			// issue #18): la nota desglosa la cola solo cuando fue material (≥1s)
+			// issue #18): la nota desglosa la cola solo cuando fue material
 			const { elapsedMs, queuedMs } = await runSetup(deps.run, { command: setupCommand, cwd: worktree.dir });
 			const secs = (ms: number) => `${Math.round(ms / 1000)}s`;
 			setupNote =
-				queuedMs >= 1_000
+				queuedMs >= QUEUED_NOTE_THRESHOLD_MS
 					? `setup OK (${setupCommand}, ${secs(elapsedMs)} — ${secs(queuedMs)} esperando otro setup)`
 					: `setup OK (${setupCommand}, ${secs(elapsedMs)})`;
 		} catch (err) {

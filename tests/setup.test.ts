@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { localRun, type RunFn } from "../src/herdr.ts";
-import { fakeRun, ok, waitFor } from "./helpers.ts";
+import { deferred, fakeRun, ok, waitFor } from "./helpers.ts";
 import {
 	detectSetupCommand,
 	LOCKFILE_COMMANDS,
@@ -105,8 +105,7 @@ describe("runSetup", () => {
 	});
 
 	it("cola del mutex: elapsedMs ES wall-clock desde entrada (incluye espera) y queuedMs la desglosa (minor 4, issue #18)", async () => {
-		let release!: () => void;
-		const gate = new Promise<void>((r) => (release = r));
+		const { gate, release } = deferred();
 		let held = false;
 		const run: RunFn = async () => {
 			if (!held) {
@@ -173,8 +172,7 @@ describe("serializeSetup", () => {
 	it("la segunda NO arranca hasta que acaba la primera (mutex en-proceso, spec D6)", async () => {
 		const started: string[] = [];
 		const mk = (id: string) => {
-			let release!: () => void;
-			const gate = new Promise<void>((r) => (release = r));
+			const { gate, release } = deferred();
 			return {
 				fn: () =>
 					new Promise<void>((res) => {
@@ -200,8 +198,7 @@ describe("serializeSetup", () => {
 	it("el fallo de la primera no rompe a la segunda (serializa ejecución, no fallos)", async () => {
 		const started: string[] = [];
 		const mk = (id: string, fail: boolean) => {
-			let release!: () => void;
-			const gate = new Promise<void>((r) => (release = r));
+			const { gate, release } = deferred();
 			return {
 				fn: () =>
 					new Promise<void>((res, rej) => {

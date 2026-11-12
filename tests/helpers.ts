@@ -42,3 +42,10 @@ export async function waitFor(cond: () => boolean, what: string, ms = 3_000): Pr
 		await new Promise((r) => setTimeout(r, 25));
 	}
 }
+
+/** Gate manual para tests de concurrencia: `gate` queda pendiente hasta `release()`. */
+export function deferred(): { gate: Promise<void>; release: () => void } {
+	let release!: () => void;
+	const gate = new Promise<void>((r) => (release = r));
+	return { gate, release };
+}

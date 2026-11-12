@@ -7,7 +7,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { RunFn } from "./herdr.ts";
+import type { RunFailure, RunFn } from "./herdr.ts";
 
 /** Modo resuelto de setupCommand. */
 export type SetupMode =
@@ -107,7 +107,7 @@ export async function runSetup(
 			// localRun SOLO lanza en timeout (Error con stdout/stderr parciales y flag
 			// `timedOut`, T1). Una RunFn inyectada que lance otra cosa es out-of-contract:
 			// se distingue por el flag, no se etiqueta a ciegas (minor 3, issue #18)
-			const e = err as Error & { stdout?: string; stderr?: string; timedOut?: boolean };
+			const e = err as RunFailure;
 			const reason = e.timedOut === true ? "timeout" : `excepción: ${e.message}`;
 			throw new Error(`pi-herdr: setup "${o.command}" falló (${reason})\n${tailOf(e.stderr ?? "", e.stdout ?? "")}`);
 		}
