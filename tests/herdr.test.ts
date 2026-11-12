@@ -5,6 +5,7 @@ import {
 	agentList,
 	agentPrompt,
 	agentRead,
+	agentSendKeys,
 	agentStart,
 	assertHerdrEnv,
 	closeTarget,
@@ -121,6 +122,19 @@ describe("agentStart", () => {
 			args: ["agent", "start", "impl-x", "--kind", "pi", "--pane", "w4:p4M"],
 			opts: { timeoutMs: 120_000 },
 		});
+	});
+});
+
+describe("agentSendKeys (spec 006 D1)", () => {
+	it("args exactos: agent send-keys <name> esc — key FIJA, misma superficie runOk", async () => {
+		const { run, calls } = fakeRun({ "agent send-keys": ok('{"result":{"type":"ok"}}') });
+		await agentSendKeys(run, { name: "impl-x" });
+		expect(calls[0]!.args).toEqual(["agent", "send-keys", "impl-x", "esc"]);
+	});
+
+	it("exit != 0 lanza Error con la salida del comando", async () => {
+		const { run } = fakeRun({ "agent send-keys": { code: 1, stdout: "", stderr: "invalid key" } });
+		await expect(agentSendKeys(run, { name: "impl-x" })).rejects.toThrow(/send-keys falló.*invalid key/s);
 	});
 });
 

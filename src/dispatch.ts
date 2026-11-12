@@ -6,8 +6,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
 	agentPrompt,
 	agentRead,
+	agentSendKeys,
 	agentStart,
 	assertHerdrEnv,
+	safeAgentStatus,
 	closeTarget,
 	paneSplitRight,
 	tabCreate,
@@ -118,8 +120,13 @@ export function herdrWaitSpawn(name: string, phase: WaitPhase = "settle"): Child
 	return spawn("herdr", waitArgs(name, phase), { stdio: ["ignore", "pipe", "pipe"] });
 }
 
-/** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión. */
-export async function promptAgent(deps: DispatchDeps, name: string, text: string): Promise<string> {
+/** herdr_prompt: segunda ronda sobre un agente vivo de esta sesión.
+ * spec 006 D2/D3/D7: `interrupt: true` = prompt (steering encolado DENTRO de
+ * pi) + esc al tool call en curso si — y solo si — el agente está working:
+ * una sola operación atómica, en ese orden. blocked/idle|done NO reciben esc
+ * (abort auto-infligido / diálogo humano delante). El fallo del esc NO lanza:
+ * el prompt ya está dentro y ocultarlo tras un throw sería mentir (D7). */
+export async function promptAgent(deps: DispatchDeps, name: string, text: string, interrupt = false): Promise<string> {
 	const rec = deps.registry.get(name);
 	if (!rec) {
 		throw new Error(`pi-herdr: despacho "${name}" no encontrado en esta sesión. Usa herdr_agents para listar los vivos.`);
@@ -133,12 +140,38 @@ export async function promptAgent(deps: DispatchDeps, name: string, text: string
 		return `El agente ${name} está bloqueado esperando aprobación o input: decide en su pane (visible en herdr) y vuelve a promptear después.`;
 	}
 	deps.dagr?.prompt(name, text);
+	// fases honestas (D7): el prompt YA está dentro; el interrupt es extra y
+	// jamás lanza — sus fallos viajan en el texto de la respuesta
+	let interruptNote = "";
+	if (interrupt) {
+		// D3: SOLO un working verificado se interrumpe — sin estado no hay esc
+		// (enviarlo a ciegas podría abortar a un agente idle)
+		const { status, error } = await safeAgentStatus(deps.run, name);
+		if (error !== undefined) {
+			interruptNote = ` No se pudo verificar el estado del agente (${error.message}): sin esc — solo un agente working verificado se interrumpe.`;
+		}
+		if (status === "working") {
+			try {
+				await agentSendKeys(deps.run, { name });
+				rec.interruptGrace = true; // D5: esc con éxito → grace hasta el próximo settle
+				interruptNote =
+					" Agente working: esc enviado al pane (abort del tool call en curso); el steering encolado arranca la siguiente ronda al asentarse el abort." +
+					" Ojo: si el agente asienta sin retomar la ronda, el despacho NO se cerrará solo — llegará un evento interrupted para que decidas (herdr_prompt/herdr_stop).";
+			} catch (err) {
+				interruptNote =
+					` ⚠ El prompt SÍ quedó encolado, pero la interrupción falló: ${(err as Error).message}. ` +
+					"El steering esperará a que el tool call acabe por sí solo; reintenta herdr_prompt con interrupt:true si sigue colgado.";
+			}
+		} else if (status !== undefined) {
+			interruptNote = ` El agente no estaba trabajando (${status}): sin esc — el prompt se procesa directamente.`;
+		}
+	}
 	// issue #17: mensaje honesto según vigilancia real — membership en el map
 	// equivale a watcher vivo (trackedSettle/stopDispatch sueltan los muertos)
 	if (deps.watchers !== undefined && !deps.watchers.has(name)) {
-		return `Prompt enviado a ${name}. Ojo: este despacho está SIN watcher — el próximo settle NO llegará como evento; sigue su salida con herdr_read y ciérralo con herdr_stop.`;
+		return `Prompt enviado a ${name}.${interruptNote} Ojo: este despacho está SIN watcher — el próximo settle NO llegará como evento; sigue su salida con herdr_read y ciérralo con herdr_stop.`;
 	}
-	return `Prompt enviado a ${name}. El watcher activo notificará el próximo settle; no re-armes nada.`;
+	return `Prompt enviado a ${name}.${interruptNote} El watcher activo notificará el próximo settle; no re-armes nada.`;
 }
 
 /** herdr_read: salida del agente (recent-unwrapped). */

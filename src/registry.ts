@@ -29,6 +29,10 @@ export interface DispatchRecord {
 	piArgs?: string[];
 	/** Comando de setup que corrió en el worktree antes del agente (spec 003). */
 	setupCommand?: string;
+	/** Spec 006 D5: esc enviado con éxito y settle pendiente — un settle sin
+	 * recovery NO cierra el despacho (evento interrupted). VOLÁTIL: se muta tras
+	 * el add y jamás se persiste (D8 — resume lo pierde, ventana estrecha). */
+	interruptGrace?: boolean;
 }
 
 /** Subconjunto de la ExtensionAPI que el registry necesita (seam de tests). */

@@ -3,7 +3,7 @@ import { formatEvent, makeSettleHandler, trackedSettle } from "../src/settle.ts"
 import { Registry, type DispatchRecord } from "../src/registry.ts";
 import type { WatchEvent, WatchHandle } from "../src/watch.ts";
 import type { RunFn } from "../src/herdr.ts";
-import { fakeRun, ok } from "./helpers.ts";
+import { agentGetJson, dagrFake, fakeRun, ok } from "./helpers.ts";
 
 function baseRec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	return {
@@ -20,11 +20,14 @@ function baseRec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	};
 }
 
+/** JSON de `agent get` con el estado que queramos (spec 006: settle verificado). — helper agentGetJson en helpers.ts */
+
 function setup(over: Partial<DispatchRecord> = {}) {
 	const { run, calls } = fakeRun({
 		"tab close": ok('{"result":{"type":"ok"}}'),
 		"pane close": ok('{"result":{"type":"ok"}}'),
 		"workspace close": ok('{"result":{"type":"ok"}}'),
+		"agent get": ok(agentGetJson("idle")),
 	});
 	const emitted: { content: string; details: Record<string, unknown> }[] = [];
 	const emit = (content: string, details: Record<string, unknown>) => {
@@ -48,7 +51,7 @@ describe("makeSettleHandler — settled", () => {
 		const again = await handler("impl-x", { kind: "settled", state: "idle", output: "resultado" });
 		expect(again).toBe(false);
 		expect(calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
-		expect(calls[0].args).toEqual(["tab", "close", "w4:t4K"]);
+		expect(calls.find((c) => c.args[1] === "close")!.args).toEqual(["tab", "close", "w4:t4K"]);
 		expect(registry.get("impl-x")!.status).toBe("closed");
 		expect(emitted).toHaveLength(1);
 		expect(emitted[0].content).toContain("settled (idle)");
@@ -165,11 +168,11 @@ describe("makeSettleHandler — cierre por topología", () => {
 	it("record pane cierra pane, record workspace cierra workspace", async () => {
 		const pane = setup({ topology: "pane", targetId: "w4:p5A", paneId: "w4:p5A" });
 		await pane.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
-		expect(pane.calls[0].args).toEqual(["pane", "close", "w4:p5A"]);
+		expect(pane.calls.find((c) => c.args[1] === "close")!.args).toEqual(["pane", "close", "w4:p5A"]);
 
 		const ws = setup({ topology: "workspace", targetId: "w5", paneId: "w5:p1" });
 		await ws.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
-		expect(ws.calls[0].args).toEqual(["workspace", "close", "w5"]);
+		expect(ws.calls.find((c) => c.args[1] === "close")!.args).toEqual(["workspace", "close", "w5"]);
 	});
 });
 
@@ -251,6 +254,135 @@ describe("makeSettleHandler — stranded (issue #14: wait falló con el agente v
 	});
 });
 
+describe("makeSettleHandler — anti-blip + grace del interrupt (spec 006)", () => {
+	function setup006(o: { status?: string; getThrows?: boolean; rec?: Partial<DispatchRecord> } = {}) {
+		const getRoute = o.getThrows ? { code: 1, stdout: "", stderr: "boom-get" } : ok(agentGetJson(o.status ?? "idle"));
+		const { run, calls } = fakeRun({
+			"tab close": ok('{"result":{"type":"ok"}}'),
+			"pane close": ok('{"result":{"type":"ok"}}'),
+			"workspace close": ok('{"result":{"type":"ok"}}'),
+			"agent get": getRoute,
+		});
+		const emitted: { content: string; details: Record<string, unknown> }[] = [];
+		const emit = (content: string, details: Record<string, unknown>) => emitted.push({ content, details });
+		const cleanups: unknown[] = [];
+		const dagr = dagrFake();
+		const dagrCalls = dagr.calls;
+		const registry = new Registry();
+		const rec = baseRec(o.rec);
+		registry.add(rec);
+		const cleanupWorktree = async () => {
+			cleanups.push(1);
+			return { removed: true } as const;
+		};
+		const handler = makeSettleHandler({ run, registry, emit, cleanupWorktree, dagr: dagr.hook });
+		return { handler, rec, registry, emitted, calls, cleanups, dagrCalls, getRoute };
+	}
+
+	it("blip: settled con el agente YA working (grace activo) → suprimido: 0 emit/close/cleanup/dagr, record intacto, true, grace clear (GWT5/R5)", async () => {
+		const s = setup006({ status: "working", rec: { interruptGrace: true } });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "blip" });
+		expect(again).toBe(true);
+		expect(s.emitted).toHaveLength(0);
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(0);
+		expect(s.cleanups).toHaveLength(0);
+		expect(s.dagrCalls).toHaveLength(0);
+		expect(s.registry.get("impl-x")!.status).toBe("live");
+		expect(s.rec.interruptGrace).toBe(false);
+	});
+
+	it("blip sin grace también se suprime: settle transitorio genérico, no solo del interrupt", async () => {
+		const s = setup006({ status: "working" });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "blip" });
+		expect(again).toBe(true);
+		expect(s.emitted).toHaveLength(0);
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(0);
+		expect(s.registry.get("impl-x")!.status).toBe("live");
+	});
+
+	it("grace + agente idle: evento interrupted (kind en details), SIN close/markClosed con keepOpen:false, dagr.note, true, grace clear (GWT6/R6)", async () => {
+		const s = setup006({ status: "idle", rec: { interruptGrace: true, keepOpen: false } });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "abortado" });
+		expect(again).toBe(true);
+		expect(s.emitted).toHaveLength(1);
+		expect(s.emitted[0]!.details.kind).toBe("interrupted");
+		expect(s.emitted[0]!.details.agent).toBe("impl-x");
+		expect(s.emitted[0]!.content).toMatch(/\[impl-x\] interrupted/);
+		expect(s.emitted[0]!.content).toMatch(/herdr_prompt/);
+		expect(s.emitted[0]!.content).toMatch(/herdr_stop/);
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(0);
+		expect(s.cleanups).toHaveLength(0);
+		expect(s.registry.get("impl-x")!.status).toBe("live");
+		expect(s.dagrCalls).toEqual([{ what: "note", arg: ["impl-x", "interrupted — idle a la espera de decisión"] }]);
+		expect(s.rec.interruptGrace).toBe(false);
+	});
+
+	it("grace con keepOpen:true también: interrupted — el grace manda sobre keepOpen (D5)", async () => {
+		const s = setup006({ status: "idle", rec: { keepOpen: true, interruptGrace: true } });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "abortado" });
+		expect(again).toBe(true);
+		expect(s.emitted[0]!.details.kind).toBe("interrupted");
+		expect(s.calls).toHaveLength(1); // solo el agent get de verificación
+		expect(s.registry.get("impl-x")!.status).toBe("live");
+	});
+
+	it("grace + agent get que LANZA: grace path igual — interrupted, sin cierre con estado no verificable (GWT7)", async () => {
+		const s = setup006({ getThrows: true, rec: { interruptGrace: true } });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "x" });
+		expect(again).toBe(true);
+		expect(s.emitted).toHaveLength(1);
+		expect(s.emitted[0]!.details.kind).toBe("interrupted");
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(0);
+		expect(s.registry.get("impl-x")!.status).toBe("live");
+		expect(s.rec.interruptGrace).toBe(false);
+	});
+
+	it("sin grace + agente idle: emit final + close + markClosed — idéntico a hoy, dagr.settled (GWT8/R7)", async () => {
+		const s = setup006({ status: "idle" });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "resultado" });
+		expect(again).toBe(false);
+		expect(s.emitted).toHaveLength(1);
+		expect(s.emitted[0]!.content).toContain("settled (idle)");
+		expect(s.emitted[0]!.content).toContain("resultado");
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
+		expect(s.registry.get("impl-x")!.status).toBe("closed");
+		expect(s.dagrCalls).toEqual([{ what: "settled", arg: ["impl-x", "idle"] }]);
+	});
+
+	it("sin grace + agent get que lanza: entrega como hoy — JAMÁS suprimir sin verificación (GWT9)", async () => {
+		const s = setup006({ getThrows: true });
+		const again = await s.handler("impl-x", { kind: "settled", state: "idle", output: "resultado" });
+		expect(again).toBe(false);
+		expect(s.emitted).toHaveLength(1);
+		expect(s.emitted[0]!.content).toContain("settled (idle)");
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
+		expect(s.registry.get("impl-x")!.status).toBe("closed");
+	});
+
+	it("flujo interrupt→blip→settle final: SOLO se entrega el evento final; target cerrado UNA vez (GWT10/R8)", async () => {
+		const s = setup006({ status: "working", rec: { interruptGrace: true } });
+		const again1 = await s.handler("impl-x", { kind: "settled", state: "idle", output: "blip" });
+		expect(again1).toBe(true); // suprimido: la ronda encolada ya está working
+		expect(s.emitted).toHaveLength(0);
+		s.getRoute.stdout = agentGetJson("idle"); // el settle de la ronda completada
+		const again2 = await s.handler("impl-x", { kind: "settled", state: "idle", output: "resultado final" });
+		expect(again2).toBe(false);
+		expect(s.emitted).toHaveLength(1);
+		expect(s.emitted[0]!.content).toContain("resultado final");
+		expect(s.calls.filter((c) => c.args[1] === "close")).toHaveLength(1);
+		expect(s.registry.get("impl-x")!.status).toBe("closed");
+	});
+
+	it("keepOpen:true SIN grace: byte-idéntico a hoy — ni siquiera verifica (0 calls) (objetivo 5)", async () => {
+		const s = setup006({ status: "working", rec: { keepOpen: true } });
+		const again = await s.handler("impl-x", { kind: "settled", state: "done", output: "r1" });
+		expect(again).toBe(true);
+		expect(s.calls).toHaveLength(0);
+		expect(s.emitted[0]!.content).toContain("keepOpen");
+		expect(s.dagrCalls).toEqual([{ what: "settled", arg: ["impl-x", "done"] }]);
+	});
+});
+
 describe("trackedSettle — el map de watchers suelta el handle en cierre definitivo (M5, issue #13)", () => {
 	it("handler false (settled sin keepOpen / gone / ya closed) → elimina el handle del map", async () => {
 		const watchers = new Map<string, WatchHandle>([["impl-x", { stop() {} }]]);
@@ -303,25 +435,6 @@ describe("formatEvent", () => {
 });
 
 describe("makeSettleHandler — grabado dagr (spec 005 D0)", () => {
-	function dagrFake() {
-		const calls: { what: string; arg?: unknown }[] = [];
-		return {
-			calls,
-			hook: {
-				reserve: () => undefined,
-				born: () => undefined,
-				release: () => undefined,
-				childrenExempt: false,
-				prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
-				blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
-				settled: (a: string, s: string) => calls.push({ what: "settled", arg: [a, s] }),
-				gone: (a: string, r?: string) => calls.push({ what: "gone", arg: [a, r] }),
-				canceled: (a: string, r?: string) => calls.push({ what: "canceled", arg: [a, r] }),
-				note: (a: string, d: string) => calls.push({ what: "note", arg: [a, d] }),
-			},
-		};
-	}
-
 	it("blocked/settled/keepOpen/gone/stranded llaman al hook con el agente", async () => {
 		const dagr = dagrFake();
 		const registry = new Registry();
