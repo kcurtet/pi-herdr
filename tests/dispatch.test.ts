@@ -1170,4 +1170,22 @@ describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
 		const msg = await promptAgent(deps, "impl-x", "sigue");
 		expect(msg).toMatch(/impl-x/);
 	});
+
+	it("prompt con interrupt crea el intento como cualquier prompt (spec 006 D6)", async () => {
+		const getRoute = (status: string) =>
+			ok(`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`);
+		const { run } = fakeRun({
+			...routes,
+			"agent get": getRoute("working"),
+			"agent send-keys": ok('{"result":{"type":"ok"}}'),
+		});
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		registry.add({ ...baseRecord });
+		const { hook, calls } = dagrFake();
+		deps.dagr = hook;
+		await promptAgent(deps, "impl-x", "para el test y reporta", true);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.arg).toEqual(["impl-x", "para el test y reporta"]);
+	});
 });
