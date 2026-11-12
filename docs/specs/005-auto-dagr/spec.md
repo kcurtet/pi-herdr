@@ -34,6 +34,7 @@ Decisión de arquitectura (humano, 2026-11-07): el punto de grabación es **pi-h
 - blocked → intento `blocked` (con `unblock owner: operator` si W205 lo pide); tarea `blocked`.
 - gone/muerte (o reconcile tras resume que cierra despachos muertos) → intento `lost` + tarea `failed` (nota `reconciled` si aplica).
 - `herdr_stop` y cierre de sesión (shutdownCleanup) → intento `canceled` + tarea `canceled` (nota `fin de sesión` en el cierre normal).
+- cierre del pane con MÁS de un intento vivo (issue #20: `herdr_prompt` sobre turno colgado) → el principal cierra con la transición (settle: el ÚLTIMO vivo, que E150 exige coincidir con el estado terminal de la tarea; gone/canceled: lost) y cada intento que siga `working` se reconcilia `lost` con receipt de la causa del cierre + evento `attempt_settled` — sin stale attempts (W209).
 - `lost` NUNCA es estado de tarea (E112): es outcome de intento.
 
 **D1 — Eventos grabados.** En la sesión pi que carga pi-herdr:

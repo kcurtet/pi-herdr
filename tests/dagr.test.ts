@@ -199,6 +199,20 @@ describe("ciclo de vida grabado (writes atómicos, ordenados)", () => {
 		expect(doc.tasks.find((t) => t.id === "a2-1")!.attempts).toHaveLength(1);
 	});
 
+	it("issue #20 (W209): prompt mientras trabaja + settle → a1 reconciliado lost, a2 (último vivo) settlea — E150", async () => {
+		const { r } = await initRecorder();
+		r.born({ agent: "impl", paneId: "w1:p3", title: "tarea", blocked: false });
+		r.prompt("impl", "nudge"); // a2 working mientras a1 sigue working
+		r.settled("impl", "idle"); // el pane settlea y cierra
+		await r.flush();
+		const doc = readDoc(r);
+		const task = doc.tasks[0]!;
+		expect(task.state).toBe("settled_unverified");
+		expect(task.attempts.map((a) => a.state)).toEqual(["lost", "settled_unverified"]);
+		expect(task.attempts[0]!.ended_at).toBeTruthy();
+		expect(doc.events.at(-1)).toMatchObject({ type: "attempt_settled", attempt: task.attempts[0]!.id });
+	});
+
 	it("agente sin tarea (ajeno/desconocido): no-op sin fichero nuevo", async () => {
 		const { r } = await initRecorder();
 		r.settled("nadie", "idle");
