@@ -141,6 +141,19 @@ describe("stopDispatch (herdr_stop wiring)", () => {
 		expect(registry.get("impl-x")!.status).toBe("closed");
 		expect(msg).toMatch(/impl-x/);
 	});
+
+	it("borra el handle del map: el watcher parado no queda huérfano (issue #17)", async () => {
+		const watchers = new Map<string, { stop(): void }>();
+		let stopped = 0;
+		watchers.set("impl-x", { stop() { stopped++; } });
+		const registry = new Registry();
+		registry.add(rec());
+		const { run } = fakeRun(closeRoutes);
+		const msg = await stopDispatch({ run, registry, cleanupWorktree: noCleanup, watchers }, "impl-x");
+		expect(stopped).toBe(1);
+		expect(watchers.has("impl-x")).toBe(false);
+		expect(msg).toMatch(/detenido y tab cerrado/);
+	});
 });
 
 describe("factory de la extensión", () => {
