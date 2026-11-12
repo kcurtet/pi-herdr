@@ -450,6 +450,17 @@ describe("dispatch — worktree", () => {
 		expect(r.setupNote).toMatch(/setup OK \(npm install, \d+s\)/);
 	});
 
+	it("kind≠pi + setupCommand: permitido sin gate (el setup prepara el worktree, no al agente — minor 5, issue #18)", async () => {
+		const repo = tmpRepo(["pnpm-lock.yaml"]);
+		const { deps } = mkSetupDeps({ repoRoot: repo });
+		const r = await dispatch(
+			deps,
+			{ task: "revisa el login", kind: "claude", worktree: true, setupCommand: "npm install" },
+			{ HERDR_ENV: "1" },
+		);
+		expect(r.setupNote).toMatch(/setup OK \(npm install, \d+s\)/);
+	});
+
 	it("none: sin bash ni note — behavior actual (R3)", async () => {
 		const repo = tmpRepo(["pnpm-lock.yaml"]);
 		const { deps, calls } = mkSetupDeps({ repoRoot: repo });
