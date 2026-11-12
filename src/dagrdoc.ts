@@ -258,12 +258,11 @@ export function taskSettled(doc: DagrDoc, agent: string, state: string, now: Dat
 export function taskGone(doc: DagrDoc, agent: string, receipt: string, now: Date): void {
 	const task = taskOf(doc, agent);
 	if (!task) return;
-	const live = liveAttempt(task);
-	if (!live) return;
-	closeAttempt(live, { state: "lost", outcome: { result: "lost", evidence: "verified", receipt }, now });
+	if (!liveAttempt(task)) return;
+	// El cierre del principal es byte-idéntico al de los reconciliados (lost con
+	// el receipt de la causa): reconcileLiveAttempts hace todo en orden.
 	task.state = "failed";
 	task.unblock = undefined;
-	pushEvent(doc, { at: now.toISOString(), type: "attempt_settled", task: task.id, attempt: live.id, actor: agent, detail: `lost: ${receipt}` });
 	reconcileLiveAttempts(doc, task, agent, receipt, now);
 }
 

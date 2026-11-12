@@ -199,7 +199,7 @@ describe("ciclo de vida grabado (writes atómicos, ordenados)", () => {
 		expect(doc.tasks.find((t) => t.id === "a2-1")!.attempts).toHaveLength(1);
 	});
 
-	it("issue #20 (W209): prompt mientras trabaja + settle → a2 reconciliado lost en el run file", async () => {
+	it("issue #20 (W209): prompt mientras trabaja + settle → a1 reconciliado lost, a2 (último vivo) settlea — E150", async () => {
 		const { r } = await initRecorder();
 		r.born({ agent: "impl", paneId: "w1:p3", title: "tarea", blocked: false });
 		r.prompt("impl", "nudge"); // a2 working mientras a1 sigue working
