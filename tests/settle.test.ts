@@ -3,7 +3,7 @@ import { formatEvent, makeSettleHandler, trackedSettle } from "../src/settle.ts"
 import { Registry, type DispatchRecord } from "../src/registry.ts";
 import type { WatchEvent, WatchHandle } from "../src/watch.ts";
 import type { RunFn } from "../src/herdr.ts";
-import { fakeRun, ok } from "./helpers.ts";
+import { agentGetJson, dagrFake, fakeRun, ok } from "./helpers.ts";
 
 function baseRec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	return {
@@ -20,16 +20,14 @@ function baseRec(over: Partial<DispatchRecord> = {}): DispatchRecord {
 	};
 }
 
-/** JSON de `agent get` con el estado que queramos (spec 006: settle verificado). */
-const getJson = (status: string) =>
-	`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`;
+/** JSON de `agent get` con el estado que queramos (spec 006: settle verificado). — helper agentGetJson en helpers.ts */
 
 function setup(over: Partial<DispatchRecord> = {}) {
 	const { run, calls } = fakeRun({
 		"tab close": ok('{"result":{"type":"ok"}}'),
 		"pane close": ok('{"result":{"type":"ok"}}'),
 		"workspace close": ok('{"result":{"type":"ok"}}'),
-		"agent get": ok(getJson("idle")),
+		"agent get": ok(agentGetJson("idle")),
 	});
 	const emitted: { content: string; details: Record<string, unknown> }[] = [];
 	const emit = (content: string, details: Record<string, unknown>) => {
@@ -258,7 +256,7 @@ describe("makeSettleHandler — stranded (issue #14: wait falló con el agente v
 
 describe("makeSettleHandler — anti-blip + grace del interrupt (spec 006)", () => {
 	function setup006(o: { status?: string; getThrows?: boolean; rec?: Partial<DispatchRecord> } = {}) {
-		const getRoute = o.getThrows ? { code: 1, stdout: "", stderr: "boom-get" } : ok(getJson(o.status ?? "idle"));
+		const getRoute = o.getThrows ? { code: 1, stdout: "", stderr: "boom-get" } : ok(agentGetJson(o.status ?? "idle"));
 		const { run, calls } = fakeRun({
 			"tab close": ok('{"result":{"type":"ok"}}'),
 			"pane close": ok('{"result":{"type":"ok"}}'),
@@ -268,19 +266,8 @@ describe("makeSettleHandler — anti-blip + grace del interrupt (spec 006)", () 
 		const emitted: { content: string; details: Record<string, unknown> }[] = [];
 		const emit = (content: string, details: Record<string, unknown>) => emitted.push({ content, details });
 		const cleanups: unknown[] = [];
-		const dagrCalls: { what: string; arg?: unknown }[] = [];
-		const dagr = {
-			reserve: () => undefined,
-			born: () => undefined,
-			release: () => undefined,
-			childrenExempt: false,
-			prompt: () => undefined,
-			blocked: () => undefined,
-			settled: (a: string, s: string) => dagrCalls.push({ what: "settled", arg: [a, s] }),
-			gone: () => undefined,
-			canceled: () => undefined,
-			note: (a: string, d: string) => dagrCalls.push({ what: "note", arg: [a, d] }),
-		};
+		const dagr = dagrFake();
+		const dagrCalls = dagr.calls;
 		const registry = new Registry();
 		const rec = baseRec(o.rec);
 		registry.add(rec);
@@ -288,7 +275,7 @@ describe("makeSettleHandler — anti-blip + grace del interrupt (spec 006)", () 
 			cleanups.push(1);
 			return { removed: true } as const;
 		};
-		const handler = makeSettleHandler({ run, registry, emit, cleanupWorktree, dagr });
+		const handler = makeSettleHandler({ run, registry, emit, cleanupWorktree, dagr: dagr.hook });
 		return { handler, rec, registry, emitted, calls, cleanups, dagrCalls, getRoute };
 	}
 
@@ -377,7 +364,7 @@ describe("makeSettleHandler — anti-blip + grace del interrupt (spec 006)", () 
 		const again1 = await s.handler("impl-x", { kind: "settled", state: "idle", output: "blip" });
 		expect(again1).toBe(true); // suprimido: la ronda encolada ya está working
 		expect(s.emitted).toHaveLength(0);
-		s.getRoute.stdout = getJson("idle"); // el settle de la ronda completada
+		s.getRoute.stdout = agentGetJson("idle"); // el settle de la ronda completada
 		const again2 = await s.handler("impl-x", { kind: "settled", state: "idle", output: "resultado final" });
 		expect(again2).toBe(false);
 		expect(s.emitted).toHaveLength(1);
@@ -448,25 +435,6 @@ describe("formatEvent", () => {
 });
 
 describe("makeSettleHandler — grabado dagr (spec 005 D0)", () => {
-	function dagrFake() {
-		const calls: { what: string; arg?: unknown }[] = [];
-		return {
-			calls,
-			hook: {
-				reserve: () => undefined,
-				born: () => undefined,
-				release: () => undefined,
-				childrenExempt: false,
-				prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
-				blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
-				settled: (a: string, s: string) => calls.push({ what: "settled", arg: [a, s] }),
-				gone: (a: string, r?: string) => calls.push({ what: "gone", arg: [a, r] }),
-				canceled: (a: string, r?: string) => calls.push({ what: "canceled", arg: [a, r] }),
-				note: (a: string, d: string) => calls.push({ what: "note", arg: [a, d] }),
-			},
-		};
-	}
-
 	it("blocked/settled/keepOpen/gone/stranded llaman al hook con el agente", async () => {
 		const dagr = dagrFake();
 		const registry = new Registry();

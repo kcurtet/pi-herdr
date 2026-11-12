@@ -8,7 +8,7 @@
  * live (herdr_stop sigue disponible), sin close ni cleanup — nada de lo que
  * el agente esté usando se destruye. Todo idempotente por el estado del registry.
  */
-import { agentGet, closeTarget, type RunFn } from "./herdr.ts";
+import { closeTarget, safeAgentStatus, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
 import type { WatchEvent, WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
@@ -83,15 +83,10 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 		// (objetivo 5) — la verificación solo precede a un posible cierre o a un
 		// grace activo, que manda sobre keepOpen (señalización, no cierre).
 		if (ev.kind === "settled" && (rec.interruptGrace || !rec.keepOpen)) {
-			let verified: string | undefined;
-			try {
-				verified = (await agentGet(deps.run, name)).agent_status;
-			} catch {
-				// D4: estado no verificable → JAMÁS suprimir (un settle final tragado
-				// sin verificación sería un despacho zombie invisible); con grace
-				// (D5) el path interrupted aplica igual: no se cierra a ciegas.
-				verified = undefined;
-			}
+			// D4: estado no verificable → undefined → JAMÁS suprimir (un settle final
+			// tragado sin verificación sería un despacho zombie invisible); con grace
+			// (D5) el path interrupted aplica igual: no se cierra a ciegas.
+			const { status: verified } = await safeAgentStatus(deps.run, name);
 			if (verified === "working") {
 				// D4: blip transitorio (abort→steering, rounds encadenados, prompt
 				// manual del humano): settle suprimido con CERO side effects — sin

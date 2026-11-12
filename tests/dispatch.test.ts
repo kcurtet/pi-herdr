@@ -8,7 +8,7 @@ import { saveDefaults, loadDefaults } from "../src/config.ts";
 import { Registry } from "../src/registry.ts";
 import type { WatchEvent } from "../src/watch.ts";
 import type { ChildProcess } from "node:child_process";
-import { deferred, fakeRun, fx, ok } from "./helpers.ts";
+import { agentGetJson, dagrFake, deferred, fakeRun, fx, ok } from "./helpers.ts";
 import { serializeSetup } from "../src/setup.ts";
 
 type SettleHandler = (name: string, ev: WatchEvent) => Promise<boolean>;
@@ -131,8 +131,7 @@ const baseRecord: import("../src/registry.ts").DispatchRecord = {
 
 describe("herdr_prompt — interrupt (spec 006)", () => {
 	/** Route `agent get` con el estado que queramos ver. */
-	const getRoute = (status: string) =>
-		ok(`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`);
+	const getRoute = (status: string) => ok(agentGetJson(status));
 	const sendKeysOk = ok('{"result":{"type":"ok"}}');
 
 	it("agente working: calls en orden prompt→get→send-keys con key esc, grace seteado, respuesta menciona la interrupción (GWT1/R1)", async () => {
@@ -1010,27 +1009,6 @@ describe("waitArgs (herdr agent wait) — issue #7", () => {
 });
 
 describe("dispatch — linaje dagr (spec 005 D3)", () => {
-	function dagrFake() {
-		const calls: { what: string; arg?: unknown }[] = [];
-		const hook = {
-			reserve: (agent: string) => {
-				calls.push({ what: "reserve", arg: agent });
-				return { env: { DAGR_RUN: "/st/nyx/s0.json", DAGR_TASK: `${agent}-1` }, task: `${agent}-1` };
-			},
-			release: (agent: string) => calls.push({ what: "release", arg: agent }),
-			born: (o: { agent: string; paneId: string; title: string; blocked: boolean }) =>
-				calls.push({ what: "born", arg: o }),
-			childrenExempt: true,
-			prompt: () => undefined,
-			blocked: () => undefined,
-			settled: () => undefined,
-			gone: () => undefined,
-			canceled: () => undefined,
-			note: () => undefined,
-		};
-		return { hook, calls };
-	}
-
 	function envOf(args: string[]): Record<string, string> {
 		const out: Record<string, string> = {};
 		for (let i = 0; i < args.length; i++) {
@@ -1122,23 +1100,6 @@ describe("dispatch — linaje dagr (spec 005 D3)", () => {
 });
 
 describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
-	function dagrFake() {
-		const calls: { what: string; arg?: unknown }[] = [];
-		const hook = {
-			reserve: () => undefined,
-			born: () => undefined,
-			release: () => undefined,
-			childrenExempt: false,
-			prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
-			blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
-			settled: () => undefined,
-			gone: () => undefined,
-			canceled: () => undefined,
-			note: () => undefined,
-		};
-		return { hook, calls };
-	}
-
 	it("submitted → hook.prompt con el texto del prompt", async () => {
 		const { run } = fakeRun(routes);
 		const registry = new Registry();
@@ -1172,11 +1133,9 @@ describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
 	});
 
 	it("prompt con interrupt crea el intento como cualquier prompt (spec 006 D6)", async () => {
-		const getRoute = (status: string) =>
-			ok(`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`);
 		const { run } = fakeRun({
 			...routes,
-			"agent get": getRoute("working"),
+			"agent get": ok(agentGetJson("working")),
 			"agent send-keys": ok('{"result":{"type":"ok"}}'),
 		});
 		const registry = new Registry();

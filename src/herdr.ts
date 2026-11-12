@@ -209,6 +209,20 @@ export async function agentGet(run: RunFn, name: string): Promise<AgentInfo> {
 	return parse<{ agent: AgentInfo }>(stdout, "agent get").result.agent;
 }
 
+/** agentGet tolerante a fallo (spec 006 D3/D4): estado verificado o undefined,
+ * con el error para mensajes honestos — sin estado verificado nunca hay esc
+ * ni supresión de settle (no se actúa a ciegas). */
+export async function safeAgentStatus(
+	run: RunFn,
+	name: string,
+): Promise<{ status?: string; error?: Error }> {
+	try {
+		return { status: (await agentGet(run, name)).agent_status };
+	} catch (err) {
+		return { error: err as Error };
+	}
+}
+
 export type CloseTarget = { kind: "tab" | "pane" | "workspace"; id: string };
 
 export async function closeTarget(run: RunFn, t: CloseTarget): Promise<void> {

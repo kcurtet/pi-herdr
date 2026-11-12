@@ -4,12 +4,12 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import {
-	agentGet,
 	agentPrompt,
 	agentRead,
 	agentSendKeys,
 	agentStart,
 	assertHerdrEnv,
+	safeAgentStatus,
 	closeTarget,
 	paneSplitRight,
 	tabCreate,
@@ -144,13 +144,11 @@ export async function promptAgent(deps: DispatchDeps, name: string, text: string
 	// jamás lanza — sus fallos viajan en el texto de la respuesta
 	let interruptNote = "";
 	if (interrupt) {
-		let status: string | undefined;
-		try {
-			status = (await agentGet(deps.run, name)).agent_status;
-		} catch (err) {
-			// sin estado verificado no hay esc: enviarlo a ciegas podría abortar
-			// a un agente idle (D3: SOLO un working verificado se interrumpe)
-			interruptNote = ` No se pudo verificar el estado del agente (${(err as Error).message}): sin esc — solo un agente working verificado se interrumpe.`;
+		// D3: SOLO un working verificado se interrumpe — sin estado no hay esc
+		// (enviarlo a ciegas podría abortar a un agente idle)
+		const { status, error } = await safeAgentStatus(deps.run, name);
+		if (error !== undefined) {
+			interruptNote = ` No se pudo verificar el estado del agente (${error.message}): sin esc — solo un agente working verificado se interrumpe.`;
 		}
 		if (status === "working") {
 			try {

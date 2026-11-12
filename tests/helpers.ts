@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { RunFn } from "../src/herdr.ts";
+import type { DagrHook } from "../src/dagr.ts";
 
 export interface RecordedCall {
 	file: string;
@@ -48,4 +49,29 @@ export function deferred(): { gate: Promise<void>; release: () => void } {
 	let release!: () => void;
 	const gate = new Promise<void>((r) => (release = r));
 	return { gate, release };
+}
+
+/** JSON de `herdr agent get` con el estado dado (spec 006: esc y settle verificados). */
+export const agentGetJson = (status: string): string =>
+	`{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","name":"impl-x","pane_id":"w4:p4M"}},"type":"agent_info"}`;
+
+/** Fake del DagrHook que graba TODAS las llamadas — aserta solo las que importen. */
+export function dagrFake(): { hook: DagrHook; calls: { what: string; arg?: unknown }[] } {
+	const calls: { what: string; arg?: unknown }[] = [];
+	const hook: DagrHook = {
+		reserve: (agent: string) => {
+			calls.push({ what: "reserve", arg: agent });
+			return { env: { DAGR_RUN: "/st/nyx/s0.json", DAGR_TASK: `${agent}-1` }, task: `${agent}-1` };
+		},
+		release: (agent: string) => calls.push({ what: "release", arg: agent }),
+		born: (o: { agent: string; paneId: string; title: string; blocked: boolean }) => calls.push({ what: "born", arg: o }),
+		childrenExempt: true,
+		prompt: (a: string, n: string) => calls.push({ what: "prompt", arg: [a, n] }),
+		blocked: (a: string) => calls.push({ what: "blocked", arg: a }),
+		settled: (a: string, s: string) => calls.push({ what: "settled", arg: [a, s] }),
+		gone: (a: string, r?: string) => calls.push({ what: "gone", arg: [a, r] }),
+		canceled: (a: string, r?: string) => calls.push({ what: "canceled", arg: [a, r] }),
+		note: (a: string, d: string) => calls.push({ what: "note", arg: [a, d] }),
+	};
+	return { hook, calls };
 }
