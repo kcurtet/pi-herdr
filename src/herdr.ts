@@ -172,6 +172,18 @@ export async function agentPrompt(run: RunFn, o: { name: string; text: string })
 	throw new Error(`herdr agent prompt falló (exit ${r.code}): ${detail}`);
 }
 
+/** Key de interrupción FIJA (spec 006 D1): en pi, `esc` = app.interrupt y
+ * aborta el tool call en curso. `ctrl+c` está VETADO: en pi es app.clear
+ * (borra el input encolado) y la segunda pulsación mata al agente. */
+const INTERRUPT_KEY = "esc";
+
+/** Interrupción del agente vía superficie `agent`: `herdr agent send-keys <name> esc`
+ * (herdr valida las keys ANTES de escribir en el PTY). Kinds ≠ pi: misma key,
+ * best-effort por convención de TUI — solo pi es contractual (spec 006 D1). */
+export async function agentSendKeys(run: RunFn, o: { name: string }): Promise<void> {
+	await runOk(run, ["agent", "send-keys", o.name, INTERRUPT_KEY]);
+}
+
 export async function agentRead(run: RunFn, o: { name: string; lines?: number }): Promise<string> {
 	const stdout = await runOk(run, [
 		"agent",
