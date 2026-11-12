@@ -15,8 +15,6 @@ export type SetupMode =
 	| { kind: "auto" }
 	| { kind: "literal"; command: string };
 
-export type ExistsFn = (path: string) => boolean;
-
 /**
  * Lockfile → comando de instalación. El ORDEN del array es la prioridad
  * (spec 003 D2): pnpm > bun > yarn > npm (`package-lock.json` el último
@@ -47,10 +45,12 @@ export function parseSetupMode(setupCommand: string | undefined, worktree: boole
 	return { kind: "literal", command: setupCommand };
 }
 
-/** Pure: primer lockfile conocido (por prioridad) → su comando; undefined si no hay. */
-export function detectSetupCommand(repoRoot: string, exists: ExistsFn = existsSync): string | undefined {
+/** Pure: primer lockfile conocido (por prioridad) → su comando; undefined si no hay.
+ * Sin seam de `exists`: los tests golpean el FS real (tmpdirs), que es el
+ * comportamiento que importa (minor 1, issue #18 — seam sin callers). */
+export function detectSetupCommand(repoRoot: string): string | undefined {
 	for (const { file, command } of LOCKFILE_COMMANDS) {
-		if (exists(join(repoRoot, file))) return command;
+		if (existsSync(join(repoRoot, file))) return command;
 	}
 	return undefined;
 }
@@ -69,6 +69,10 @@ function tailOf(stderr: string, stdout: string): string {
  * Mutex en-proceso (spec D6): los setups de dispatches concurrentes corren uno
  * tras otro. Serializa la EJECUCIÓN, no los fallos: si una setup rechaza, la
  * siguiente arranca igual (queue = next.catch(() => undefined)).
+ *
+ * Exportado pese a no tener callers de producción: es la unidad bajo prueba
+ * del mutex (tests/setup.test.ts) — testearla a través de dispatch sería un
+ * test de integración acoplado al ruido. Ruling minor 2, issue #18.
  */
 let queue: Promise<unknown> = Promise.resolve();
 export function serializeSetup<T>(fn: () => Promise<T>): Promise<T> {
