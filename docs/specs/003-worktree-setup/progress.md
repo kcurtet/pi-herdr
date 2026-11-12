@@ -24,10 +24,13 @@ Task 5: complete (commit 9ca9a4d, tests: `npx vitest run` → 245/245 + typechec
 - **Estándares** (rev-003-estandares): MERGE. Fix aplicado: Duplicated Code → extraído `rollbackNote` en worktree.ts, consumido por ambos catches de dispatch (commit 41a2c97). Indent triple-tab en dispatchReport (defecto propio) corregido ídem.
 - **Spec** (rev-003-spec): MERGE, sin hallazgos materiales. R1-R10 + 10 GWT cubiertos; scope creep solo limpiezas documentadas.
 
-### Minors diferidos (issue)
-1. Seam `ExistsFn` en detectSetupCommand sin callers/tests (Speculative Generality leve).
-2. Export de `serializeSetup` solo para tests (defensible: unidad bajo prueba del mutex).
-3. runSetup etiqueta cualquier throw de RunFn como "(timeout)" — correcto con contrato localRun, falso ante RunFn inyectada out-of-contract.
-4. elapsedMs excluye la espera en cola del mutex — nota "setup OK (Xs)" subestima el tiempo percibido.
-5. Test explícito kind≠pi + setupCommand ausente (permitido por código, trivial).
+### Minors diferidos (issue #18)
+
+Resueltos en `hd/issue18-setup-polish` (issue #18). Por ítem:
+
+1. Seam `ExistsFn` → RESUELTO borrando: los tests ya golpean el FS real (tmpdirs), ningún caller inyectaba `exists`. Coste si mal: un seam muerto que cablear tests de mock acoplados a la implementación.
+2. Export de `serializeSetup` → RESUELTO conservándolo y documentándolo en el código: es la unidad bajo prueba del mutex; testearlo vía dispatch sería un test de integración acoplado al ruido. No es API público.
+3. Etiqueta "(timeout)" a ciegas → RESUELTO distinguiendo por campo adjunto: `localRun` marca su Error de timeout con `timedOut: true`; `runSetup` solo etiqueta timeout ante el flag, si no `excepción: <msg>`. Cubierto por test out-of-contract + test de timeout real (localRun).
+4. `elapsedMs` sin cola → RESUELTO redefiniendo la métrica: `elapsedMs` = wall-clock desde la ENTRADA a `runSetup` (tiempo percibido, incluye la espera del mutex) y `queuedMs` desglosa esa espera; la nota del dispatch añade "N — Ms esperando otro setup" cuando la cola ≥ 1s. Ruling: la métrica honesta es la percibida (total), con el desglose como detalle — no dos números competidores. Coste si mal: nota "setup OK (5s)" tras 40s percibidos = informe falso.
+5. Test kind≠pi + setupCommand → RESUELTO con test explícito (permitido sin gate: el setup prepara el worktree, no al agente).
 
