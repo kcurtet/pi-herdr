@@ -9,6 +9,8 @@
  * - blocked/canceled NO existen como estado de intento (E112): blocked deja el
  *   intento working con tarea blocked+unblock; canceled cierra el intento como
  *   lost con outcome verified/receipt.
+ * - cierre con MÁS de un intento vivo (issue #20): cada intento restante se
+ *   reconcilia lost con receipt de la causa (sin stale attempts → W209).
  * - Sin warnings bajo --strict: locator+liveness en working, timestamps en
  *   terminales, cause followup en n>1, eventos ascendentes, generated_at.
  */
@@ -147,6 +149,21 @@ function closeAttempt(
 	a.liveness = undefined;
 }
 
+/** Issue #20 (W209): reconciliación de intentos huérfanos al cierre del pane.
+ * Los reducers terminales cierran UN intento vivo (el principal), pero un
+ * pane puede dejar más intentos working (p.ej. herdr_prompt sobre un agente
+ * con el turno colgado). Sin esto quedan stale para siempre y dagr load
+ * reporta W209. Cada intento que SIGA working tras el cierre principal se
+ * reconcilia como lost con receipt de la causa del cierre — mismo formato que
+ * la reconciliación manual y que gone/canceled (lost: <receipt>). */
+function reconcileLiveAttempts(doc: DagrDoc, task: DagrTask, actor: string, receipt: string, now: Date): void {
+	for (const a of task.attempts) {
+		if (a.state !== "working") continue;
+		closeAttempt(a, { state: "lost", outcome: { result: "lost", evidence: "verified", receipt }, now });
+		pushEvent(doc, { at: now.toISOString(), type: "attempt_settled", task: task.id, attempt: a.id, actor, detail: `lost: ${receipt}` });
+	}
+}
+
 /** herdr_dispatch nace: task (working|blocked) + intento a1 working. Devuelve el task id. */
 export function taskBorn(
 	doc: DagrDoc,
@@ -219,19 +236,25 @@ export function taskBlocked(doc: DagrDoc, agent: string, now: Date): void {
 	pushEvent(doc, { at: now.toISOString(), type: "note", task: task.id, actor: agent, detail: "blocked: espera decisión del operador en su pane" });
 }
 
-/** settle (idle/done): intento terminal settled_unverified/asserted + task settled_unverified. */
-export function taskSettled(doc: DagrDoc, agent: string, _state: string, now: Date): void {
+/** settle (idle/done): intento terminal settled_unverified/asserted + task settled_unverified.
+ * Issue #20: el principal es el ÚLTIMO intento vivo (E150: el más reciente debe
+ * coincidir con el estado terminal de la tarea) — el nudge en vuelo es el que
+ * settlea. Los ANTERIORES que sigan working (turnos colgados/superseded) se
+ * reconcilian lost con la causa del cierre — sin stale attempts (W209). */
+export function taskSettled(doc: DagrDoc, agent: string, state: string, now: Date): void {
 	const task = taskOf(doc, agent);
 	if (!task) return;
-	const live = liveAttempt(task);
+	const live = task.attempts.findLast((a) => a.state === "working");
 	if (!live) return; // ya terminal (duplicado tardío): no reabrir
 	closeAttempt(live, { state: "settled_unverified", outcome: { result: "settled_unverified", evidence: "asserted" }, now });
 	task.state = "settled_unverified";
 	task.unblock = undefined;
 	pushEvent(doc, { at: now.toISOString(), type: "attempt_settled", task: task.id, attempt: live.id, actor: agent, detail: "settled (idle/done) — afirmado, no verificado" });
+	reconcileLiveAttempts(doc, task, agent, `pane settled (${state}) — intento vivo al cierre`, now);
 }
 
-/** gone / reconcile-muerto: intento lost + task failed, receipt con la causa. */
+/** gone / reconcile-muerto: intento lost + task failed, receipt con la causa.
+ * Issue #20: el resto de intentos vivos se reconcilia con la misma causa. */
 export function taskGone(doc: DagrDoc, agent: string, receipt: string, now: Date): void {
 	const task = taskOf(doc, agent);
 	if (!task) return;
@@ -241,9 +264,11 @@ export function taskGone(doc: DagrDoc, agent: string, receipt: string, now: Date
 	task.state = "failed";
 	task.unblock = undefined;
 	pushEvent(doc, { at: now.toISOString(), type: "attempt_settled", task: task.id, attempt: live.id, actor: agent, detail: `lost: ${receipt}` });
+	reconcileLiveAttempts(doc, task, agent, receipt, now);
 }
 
-/** herdr_stop / fin de sesión: task canceled + intento lost con receipt. */
+/** herdr_stop / fin de sesión: task canceled + intento lost con receipt.
+ * Issue #20: el resto de intentos vivos se reconcilia con la misma causa. */
 export function taskCanceled(doc: DagrDoc, agent: string, receipt: string, now: Date): void {
 	const task = taskOf(doc, agent);
 	if (!task) return;
@@ -253,6 +278,7 @@ export function taskCanceled(doc: DagrDoc, agent: string, receipt: string, now: 
 	task.state = "canceled";
 	task.unblock = undefined;
 	pushEvent(doc, { at: now.toISOString(), type: "attempt_settled", task: task.id, attempt: live.id, actor: agent, detail: `canceled: ${receipt}` });
+	reconcileLiveAttempts(doc, task, agent, receipt, now);
 }
 
 /** Nota sin cambio de estado (stranded, avisos): solo event log. */

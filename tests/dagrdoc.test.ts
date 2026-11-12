@@ -215,6 +215,71 @@ describe("ciclo de vida D0 (reducers)", () => {
 	});
 });
 
+describe("reconciliación de intentos al cierre del pane (issue #20 / W209)", () => {
+	/** Secuencia de la issue: a1 working (test colgado) → nudge crea a2 → el pane
+	 * settlea y cierra. Sin reconciliación, a2 queda working para siempre y
+	 * `dagr check --strict` reporta E150+W209 sobre el run file. */
+	function docW209() {
+		const doc = newDoc({ sessionId: "s1", title: "x", now: T0 });
+		taskBorn(doc, { agent: "impl", paneId: "w1:p3", title: "tarea", blocked: false, now: t(1) });
+		taskPrompt(doc, "impl", "nudge: sigue con el test colgado", t(2)); // a2 working, a1 SIGUE working
+		return doc;
+	}
+
+	it("settle: el ÚLTIMO intento vivo settlea (E150) y los anteriores se reconcilian lost (GWT 1)", () => {
+		const doc = docW209();
+		taskSettled(doc, "impl", "idle", t(3));
+		const task = doc.tasks[0]!;
+		expect(task.state).toBe("settled_unverified");
+		const [a1, a2] = task.attempts;
+		expect(a2!.state).toBe("settled_unverified"); // el nudge en vuelo es el que settlea
+		expect(a2!.ended_at).toBe(t(3).toISOString());
+		expect(a1!.state).toBe("lost"); // el turno colgado se reconcilia
+		expect(a1!.ended_at).toBe(t(3).toISOString());
+		expect(a1!.outcome?.result).toBe("lost");
+		expect(a1!.outcome?.evidence).toBe("verified");
+		expect(a1!.outcome?.receipt).toContain("settled"); // causa del cierre
+		expect(a1!.locator).toBeUndefined();
+		expect(a1!.liveness).toBeUndefined();
+		const ev = doc.events.find((e) => e.type === "attempt_settled" && e.attempt === a1!.id);
+		expect(ev).toMatchObject({ task: task.id, actor: "impl" });
+		expect(ev?.detail).toBe(`lost: ${a1!.outcome?.receipt}`);
+		checkStrict(doc); // el run file reconciliado ya no reporta W209 (GWT 2)
+	});
+
+	it("settle duplicado tras reconciliación: idempotente, sin doble evento (GWT 3)", () => {
+		const doc = docW209();
+		taskSettled(doc, "impl", "idle", t(3));
+		const settled = doc.events.filter((e) => e.type === "attempt_settled").length;
+		taskSettled(doc, "impl", "done", t(9)); // duplicado tardío
+		expect(doc.tasks[0]!.attempts).toHaveLength(2);
+		expect(doc.tasks[0]!.attempts[0]!.state).toBe("lost");
+		expect(doc.tasks[0]!.attempts[0]!.ended_at).toBe(t(3).toISOString());
+		expect(doc.events.filter((e) => e.type === "attempt_settled").length).toBe(settled);
+	});
+
+	it("gone con intentos vivos extra: todos lost con el receipt del gone", () => {
+		const doc = docW209();
+		taskGone(doc, "impl", "wait exited 1", t(3));
+		const task = doc.tasks[0]!;
+		expect(task.state).toBe("failed");
+		for (const a of task.attempts) {
+			expect(a.state).toBe("lost");
+			expect(a.outcome).toMatchObject({ result: "lost", evidence: "verified", receipt: "wait exited 1" });
+		}
+		checkStrict(doc);
+	});
+
+	it("canceled (herdr_stop/fin de sesión) reconcilia igual: intentos lost con el receipt", () => {
+		const doc = docW209();
+		taskCanceled(doc, "impl", "herdr_stop", t(3));
+		const task = doc.tasks[0]!;
+		expect(task.state).toBe("canceled");
+		expect(task.attempts.every((a) => a.state === "lost" && a.outcome?.receipt === "herdr_stop")).toBe(true);
+		checkStrict(doc);
+	});
+});
+
 describe("nextTaskId — ids estables por sesión+nombre+contador", () => {
 	it("re-dispatch del mismo nombre tras cierre → -2, -3 (no por pane)", () => {
 		const doc = newDoc({ sessionId: "s1", title: "x", now: T0 });
