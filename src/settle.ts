@@ -8,7 +8,7 @@
  * live (herdr_stop sigue disponible), sin close ni cleanup — nada de lo que
  * el agente esté usando se destruye. Todo idempotente por el estado del registry.
  */
-import { closeTarget, type RunFn } from "./herdr.ts";
+import { agentGet, closeTarget, type RunFn } from "./herdr.ts";
 import type { Registry } from "./registry.ts";
 import type { WatchEvent, WatchHandle } from "./watch.ts";
 import type { WorktreeRef } from "./worktree.ts";
@@ -75,6 +75,44 @@ export function makeSettleHandler(deps: SettleDeps): SettleHandler {
 			deps.emit(formatEvent(name, ev), { customType: "herdr-dispatch-event", agent: name, kind: ev.kind });
 			deps.dagr?.blocked(name);
 			return true;
+		}
+
+		// spec 006 D4/D5: un settled que llegue a tratamiento final (keepOpen
+		// false) o que lleve un interrupt nuestro pendiente (grace) se verifica
+		// UNA vez contra herdr. keepOpen sin grace queda byte-idéntico a hoy
+		// (objetivo 5) — la verificación solo precede a un posible cierre o a un
+		// grace activo, que manda sobre keepOpen (señalización, no cierre).
+		if (ev.kind === "settled" && (rec.interruptGrace || !rec.keepOpen)) {
+			let verified: string | undefined;
+			try {
+				verified = (await agentGet(deps.run, name)).agent_status;
+			} catch {
+				// D4: estado no verificable → JAMÁS suprimir (un settle final tragado
+				// sin verificación sería un despacho zombie invisible); con grace
+				// (D5) el path interrupted aplica igual: no se cierra a ciegas.
+				verified = undefined;
+			}
+			if (verified === "working") {
+				// D4: blip transitorio (abort→steering, rounds encadenados, prompt
+				// manual del humano): settle suprimido con CERO side effects — sin
+				// emit/close/cleanup/dagr/markClosed. true re-arma al watcher en fase
+				// rearm, que instant-matchea el working observado: el próximo settle
+				// entregado es el de la ronda completada.
+				rec.interruptGrace = false;
+				return true;
+			}
+			if (rec.interruptGrace) {
+				// D5: abort de esta sesión ≠ cierre — señalización para el orquestador.
+				// El record queda live y el watcher re-armado; si nunca vuelve a
+				// trabajar, queda colgado en rearm (hang aceptado): escape herdr_stop.
+				rec.interruptGrace = false;
+				deps.emit(
+					`[${name}] interrupted — la interrupción de esta sesión asentó al agente (${verified ?? "estado no verificable"}) sin que la ronda encolada arrancara. El pane queda abierto y el despacho live: herdr_prompt para la continuación o herdr_stop para cerrar.`,
+					{ customType: "herdr-dispatch-event", agent: name, kind: "interrupted" },
+				);
+				deps.dagr?.note(name, "interrupted — idle a la espera de decisión");
+				return true;
+			}
 		}
 
 		if (ev.kind === "settled" && rec.keepOpen) {
