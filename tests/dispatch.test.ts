@@ -1099,6 +1099,32 @@ describe("dispatch — linaje dagr (spec 005 D3)", () => {
 	});
 });
 
+describe("dispatch — task/kind en el record (spec 007 D9)", () => {
+	it("dispatch exitoso → record con task completa (trimada) y kind effective; el entry persiste ambos", async () => {
+		const { run } = fakeRun(routes);
+		// host real del patrón del repo: el appendEntry graba el spread de rec
+		const appended: { customType: string; data?: unknown }[] = [];
+		const registry = new Registry({ appendEntry: (customType, data) => appended.push({ customType, data }) });
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "  Revisa el login del admin  ", kind: "claude" }, { HERDR_ENV: "1" });
+		const rec = registry.get(r.agent)!;
+		expect(rec.task).toBe("Revisa el login del admin"); // trimada en dispatch, texto COMPLETO
+		expect(rec.kind).toBe("claude");
+		// R15: la persistencia viaja en el entry (spread de add)
+		const entryData = appended[0]!.data as import("../src/registry.ts").DispatchRecord;
+		expect(entryData.task).toBe("Revisa el login del admin");
+		expect(entryData.kind).toBe("claude");
+	});
+
+	it("kind default (builtin pi) también persiste en el record", async () => {
+		const { run } = fakeRun(routes);
+		const registry = new Registry();
+		const { deps } = makeDeps({ run, registry });
+		const r = await dispatch(deps, { task: "arregla el pago" }, { HERDR_ENV: "1" });
+		expect(registry.get(r.agent)!.kind).toBe("pi");
+	});
+});
+
 describe("herdr_prompt — grabado dagr (spec 005 D1)", () => {
 	it("submitted → hook.prompt con el texto del prompt", async () => {
 		const { run } = fakeRun(routes);

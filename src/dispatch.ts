@@ -360,6 +360,10 @@ async function dispatchArmed(
 		createdAt: Date.now(),
 		status: "live",
 		piArgs,
+		// spec 007 D9: la task trimada y el kind efectivo viajan en el record para
+		// que el board pinta línea completa incluso tras resume (appendEntry spread)
+		task,
+		kind: effective.kind,
 	};
 	deps.registry.add(rec);
 

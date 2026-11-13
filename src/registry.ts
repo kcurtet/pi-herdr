@@ -27,6 +27,10 @@ export interface DispatchRecord {
 	status: "live" | "closed";
 	/** Flags pi que recibió el agente (skills/extensiones, spec 002). */
 	piArgs?: string[];
+	/** Spec 007 D9: texto completo de la tarea y kind del agente — el board
+	 * los pinta tras resume; opcionales porque las entries pre-007 no los traen. */
+	task?: string;
+	kind?: string;
 	/** Comando de setup que corrió en el worktree antes del agente (spec 003). */
 	setupCommand?: string;
 	/** Spec 006 D5: esc enviado con éxito y settle pendiente — un settle sin
