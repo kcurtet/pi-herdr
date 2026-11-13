@@ -2,6 +2,10 @@
 
 Task 1: complete (commits dd18cb4, tests: npm test → 398 passed / 18 files, tsc --noEmit limpio)
 
+Task 5: complete (commits b4ddafe, tests: npm test → 438 passed / 20 files, tsc --noEmit limpio)
+
+Ruling: restaurado sin entrada en el map se reconcilia con display inicial "working" implícito (liveRecords/lines ya lo hacen así) — así el primer tick puede DEGRADARLO a idle/blocked según lo que herdr reporte; el test de R13 lo fija; coste si me equivoco: un restaurado arranca pintando WORKING unos ms hasta el tick inmediato del wiring (imperceptible y conservador).
+
 Task 4: complete (commits 74e7587, tests: npm test → 433 passed / 20 files, tsc --noEmit limpio)
 
 Ruling: BoardComponent gana un 4º parámetro opcional `maxLines` (default 5) — la firma del plan no cablea el maxLines de BoardDeps al componente y sin él /herdr no podría configurar el cap; backwards-compatible con los call-sites firmados (lines, now, paint); coste: desviación mínima de la firma congelada.
