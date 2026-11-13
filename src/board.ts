@@ -14,6 +14,14 @@ export type BoardDisplay = "working" | "blocked" | "idle" | "interrupted" | "str
 /** Kinds de evento que el watcher emite vía herdr-dispatch-event (settle.ts). */
 export type EventKind = "blocked" | "settled" | "interrupted" | "stranded" | "gone";
 
+const EVENT_KINDS: ReadonlySet<string> = new Set(["blocked", "settled", "interrupted", "stranded", "gone"]);
+
+/** Type guard para el wiring de emit (index.ts): sin él, el cast ciego dejaría
+ * mutar displays con cualquier string — kinds no reconocidos no tocan el board. */
+export function isEventKind(v: unknown): v is EventKind {
+	return typeof v === "string" && EVENT_KINDS.has(v);
+}
+
 /**
  * Display que fija un evento del watcher (D2). undefined = el evento no fija
  * display: settled con auto-close y gone despueblan la línea en el close
@@ -413,8 +421,8 @@ export class Board implements BoardEvents {
 			}
 			this.refresh();
 		} catch {
-				/* R14 */
-			}
+			/* R14 */
+		}
 	}
 
 	/** session_shutdown (R12): timer off + clear widget + estado suelto. */

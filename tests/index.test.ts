@@ -593,153 +593,153 @@ describe("session_start — recorder dagr (spec 005)", () => {
 	});
 });
 
-	describe("agent board wiring (spec 007 T4)", () => {
-		/** ChildProcess falso con EventEmitters reales (copia local del helper del
-		 * describe M5: el test dispara stdout/close para llevar al watcher REAL
-		 * hasta el evento blocked). */
-		function controllableChild(): ChildProcess {
-			const c = new EventEmitter() as unknown as Record<string, unknown>;
-			c.kill = () => {};
-			c.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
-			c.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
-			return c as unknown as ChildProcess;
+describe("agent board wiring (spec 007 T4)", () => {
+	/** ChildProcess falso con EventEmitters reales (copia local del helper del
+	 * describe M5: el test dispara stdout/close para llevar al watcher REAL
+	 * hasta el evento blocked). */
+	function controllableChild(): ChildProcess {
+		const c = new EventEmitter() as unknown as Record<string, unknown>;
+		c.kill = () => {};
+		c.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+		c.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+		return c as unknown as ChildProcess;
+	}
+
+	/** Corre todos los session_start con el ctx dado (patrón runStarts local). */
+	async function startAll(handlers: ReturnType<typeof fakeApi>["handlers"], ctx: unknown): Promise<void> {
+		for (const h of handlers.filter((x) => x.event === "session_start")) {
+			await h.fn(undefined, ctx);
 		}
+	}
 
-		/** Corre todos los session_start con el ctx dado (patrón runStarts local). */
-		async function startAll(handlers: ReturnType<typeof fakeApi>["handlers"], ctx: unknown): Promise<void> {
-			for (const h of handlers.filter((x) => x.event === "session_start")) {
-				await h.fn(undefined, ctx);
-			}
-		}
-
-		it("dispatch exitoso con ctx.mode tui → el board registra el widget (seam board de DispatchDeps, R1)", async () => {
-			await withHerdrEnv(async () => {
-				await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
-					const { api, tools, handlers } = fakeApi();
-					const { run } = fakeRun(dispatchRoutes);
-					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
-					const widgets: { id: string; content: unknown }[] = [];
-					const notifies: { msg: string; level: string }[] = [];
-					await startAll(handlers, {
-						mode: "tui", // guard de modo en el call-site (D7): jamás hasUI
-						sessionManager: { getBranch: () => [] },
-						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: (msg: string, level: string) => notifies.push({ msg, level }) },
-					});
-					expect(widgets).toHaveLength(0); // sin líneas: nada registrado
-					const t = tools.find((x) => x.name === "herdr_dispatch")!;
-					await t.execute!("c1", { task: "revisa el login" });
-					expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
-					expect(notifies).toHaveLength(0);
+	it("dispatch exitoso con ctx.mode tui → el board registra el widget (seam board de DispatchDeps, R1)", async () => {
+		await withHerdrEnv(async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
+				const { api, tools, handlers } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const widgets: { id: string; content: unknown }[] = [];
+				const notifies: { msg: string; level: string }[] = [];
+				await startAll(handlers, {
+					mode: "tui", // guard de modo en el call-site (D7): jamás hasUI
+					sessionManager: { getBranch: () => [] },
+					ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: (msg: string, level: string) => notifies.push({ msg, level }) },
 				});
-			});
-		});
-
-		it("session_start SIN mode (suite pre-007 / headless) → dispatch no toca la UI (R11)", async () => {
-			await withHerdrEnv(async () => {
-				await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
-					const { api, tools, handlers } = fakeApi();
-					const { run } = fakeRun(dispatchRoutes);
-					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
-					const widgets: unknown[] = [];
-					await startAll(handlers, { sessionManager: { getBranch: () => [] } }); // sin mode ni ui
-					const t = tools.find((x) => x.name === "herdr_dispatch")!;
-					await t.execute!("c1", { task: "revisa el login" });
-					expect(widgets).toHaveLength(0);
-				});
-			});
-		});
-
-		it("evento blocked del watcher → toast warning del board vía emit + widget BLOCKED (R2, D5)", async () => {
-			await withHerdrEnv(async () => {
-				await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
-					const { api, tools, handlers } = fakeApi();
-					const { run } = fakeRun(dispatchRoutes);
-					const children: ChildProcess[] = [];
-					extension(api as never, {
-						run,
-						spawnWait: () => {
-							const c = controllableChild();
-							children.push(c);
-							return c;
-						},
-						getConfig: () => ({}),
-					});
-					const widgets: { id: string; content: unknown }[] = [];
-					const notifies: { msg: string; level: string }[] = [];
-					await startAll(handlers, {
-						mode: "tui",
-						sessionManager: { getBranch: () => [] },
-						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: (msg: string, level: string) => notifies.push({ msg, level }) },
-					});
-					const t = tools.find((x) => x.name === "herdr_dispatch")!;
-					await t.execute!("c1", { task: "revisa el login" });
-					const child = children[0] as unknown as { stdout: EventEmitter; emit(e: string, ...a: unknown[]): void };
-					child.stdout.emit("data", JSON.stringify({ result: { agent: { agent_status: "blocked" } } }));
-					child.emit("close", 0);
-					await waitFor(() => notifies.length > 0, "toast blocked");
-					expect(notifies).toHaveLength(1); // UN toast por evento (anti-flood del watcher)
-					expect(notifies[0]!.level).toBe("warning");
-					expect(notifies[0]!.msg).toBe("herdr: revisa-login BLOCKED — decisión pendiente en su pane");
-					// el widget refleja BLOCKED en su línea
-					const factory = widgets.find((w) => w.id === "herdr-board" && typeof w.content === "function")!.content as
-						(tui: unknown, theme: { fg(_c: string, t: string): string }) => { render(width: number): string[] };
-					const comp = factory({}, { fg: (_c, t) => t });
-					expect(comp.render(80)[0]).toContain("revisa-login · BLOCKED");
-				});
-			});
-		});
-
-		it("config board off en fichero → enabled inicial off: dispatch sin widget; on en caliente lo re-enciende (R10, D6)", async () => {
-			await withHerdrEnv(async () => {
-				// PI_HOME con board:off YA en disco — el enabled inicial sale del partial crudo
-				await withIsolatedPiHome(JSON.stringify({ defaults: { board: "off" } }), async () => {
-					const { api, tools, handlers, commands } = fakeApi();
-					const { run } = fakeRun(dispatchRoutes);
-					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
-					const widgets: { id: string; content: unknown }[] = [];
-					await startAll(handlers, {
-						mode: "tui",
-						sessionManager: { getBranch: () => [] },
-						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
-					});
-					const t = tools.find((x) => x.name === "herdr_dispatch")!;
-					await t.execute!("c1", { task: "revisa el login" });
-					expect(widgets).toHaveLength(0); // board off: sin widget
-					// /herdr config board on en caliente (comando real de la factory)
-					const cmd = commands.find((c) => c.name === "herdr")!;
-					await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board on", {
-						hasUI: false,
-						ui: { notify: () => {}, select: async () => undefined },
-					});
-					await t.execute!("c2", { task: "arregla el pago" });
-					expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
-				});
-			});
-		});
-
-		it("/herdr config board off con sesión TUI viva → clear inmediato del widget (R10)", async () => {
-			await withHerdrEnv(async () => {
-				await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
-					const { api, tools, handlers, commands } = fakeApi();
-					const { run } = fakeRun(dispatchRoutes);
-					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
-					const widgets: { id: string; content: unknown }[] = [];
-					await startAll(handlers, {
-						mode: "tui",
-						sessionManager: { getBranch: () => [] },
-						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
-					});
-					const t = tools.find((x) => x.name === "herdr_dispatch")!;
-					await t.execute!("c1", { task: "revisa el login" });
-					expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
-					const cmd = commands.find((c) => c.name === "herdr")!;
-					await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board off", {
-						hasUI: false,
-						ui: { notify: () => {}, select: async () => undefined },
-					});
-					expect(widgets.some((w) => w.id === "herdr-board" && w.content === undefined)).toBe(true);
-				});
+				expect(widgets).toHaveLength(0); // sin líneas: nada registrado
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				await t.execute!("c1", { task: "revisa el login" });
+				expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
+				expect(notifies).toHaveLength(0);
 			});
 		});
 	});
+
+	it("session_start SIN mode (suite pre-007 / headless) → dispatch no toca la UI (R11)", async () => {
+		await withHerdrEnv(async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
+				const { api, tools, handlers } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const widgets: unknown[] = [];
+				await startAll(handlers, { sessionManager: { getBranch: () => [] } }); // sin mode ni ui
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				await t.execute!("c1", { task: "revisa el login" });
+				expect(widgets).toHaveLength(0);
+			});
+		});
+	});
+
+	it("evento blocked del watcher → toast warning del board vía emit + widget BLOCKED (R2, D5)", async () => {
+		await withHerdrEnv(async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
+				const { api, tools, handlers } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				const children: ChildProcess[] = [];
+				extension(api as never, {
+					run,
+					spawnWait: () => {
+						const c = controllableChild();
+						children.push(c);
+						return c;
+					},
+					getConfig: () => ({}),
+				});
+				const widgets: { id: string; content: unknown }[] = [];
+				const notifies: { msg: string; level: string }[] = [];
+				await startAll(handlers, {
+					mode: "tui",
+					sessionManager: { getBranch: () => [] },
+					ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: (msg: string, level: string) => notifies.push({ msg, level }) },
+				});
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				await t.execute!("c1", { task: "revisa el login" });
+				const child = children[0] as unknown as { stdout: EventEmitter; emit(e: string, ...a: unknown[]): void };
+				child.stdout.emit("data", JSON.stringify({ result: { agent: { agent_status: "blocked" } } }));
+				child.emit("close", 0);
+				await waitFor(() => notifies.length > 0, "toast blocked");
+				expect(notifies).toHaveLength(1); // UN toast por evento (anti-flood del watcher)
+				expect(notifies[0]!.level).toBe("warning");
+				expect(notifies[0]!.msg).toBe("herdr: revisa-login BLOCKED — decisión pendiente en su pane");
+				// el widget refleja BLOCKED en su línea
+				const factory = widgets.find((w) => w.id === "herdr-board" && typeof w.content === "function")!.content as
+					(tui: unknown, theme: { fg(_c: string, t: string): string }) => { render(width: number): string[] };
+				const comp = factory({}, { fg: (_c, t) => t });
+				expect(comp.render(80)[0]).toContain("revisa-login · BLOCKED");
+			});
+		});
+	});
+
+	it("config board off en fichero → enabled inicial off: dispatch sin widget; on en caliente lo re-enciende (R10, D6)", async () => {
+		await withHerdrEnv(async () => {
+			// PI_HOME con board:off YA en disco — el enabled inicial sale del partial crudo
+			await withIsolatedPiHome(JSON.stringify({ defaults: { board: "off" } }), async () => {
+				const { api, tools, handlers, commands } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const widgets: { id: string; content: unknown }[] = [];
+				await startAll(handlers, {
+					mode: "tui",
+					sessionManager: { getBranch: () => [] },
+					ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
+				});
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				await t.execute!("c1", { task: "revisa el login" });
+				expect(widgets).toHaveLength(0); // board off: sin widget
+				// /herdr config board on en caliente (comando real de la factory)
+				const cmd = commands.find((c) => c.name === "herdr")!;
+				await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board on", {
+					hasUI: false,
+					ui: { notify: () => {}, select: async () => undefined },
+				});
+				await t.execute!("c2", { task: "arregla el pago" });
+				expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
+			});
+		});
+	});
+
+	it("/herdr config board off con sesión TUI viva → clear inmediato del widget (R10)", async () => {
+		await withHerdrEnv(async () => {
+			await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
+				const { api, tools, handlers, commands } = fakeApi();
+				const { run } = fakeRun(dispatchRoutes);
+				extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+				const widgets: { id: string; content: unknown }[] = [];
+				await startAll(handlers, {
+					mode: "tui",
+					sessionManager: { getBranch: () => [] },
+					ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
+				});
+				const t = tools.find((x) => x.name === "herdr_dispatch")!;
+				await t.execute!("c1", { task: "revisa el login" });
+				expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
+				const cmd = commands.find((c) => c.name === "herdr")!;
+				await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board off", {
+					hasUI: false,
+					ui: { notify: () => {}, select: async () => undefined },
+				});
+				expect(widgets.some((w) => w.id === "herdr-board" && w.content === undefined)).toBe(true);
+			});
+		});
+	});
+});
 });

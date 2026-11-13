@@ -9,6 +9,7 @@ import {
 	composeLine,
 	displayFromEvent,
 	formatElapsed,
+	isEventKind,
 	WIDGET_ID,
 	type BoardDisplay,
 	type BoardLine,
@@ -197,6 +198,17 @@ describe("composeBoard — cap de líneas (D8/R9)", () => {
 	it("cada línea respeta el width (degradado aplicado por línea)", () => {
 		const out = composeBoard([1, 2].map(mk), 12, NOW, 5);
 		for (const l of out) expect(visibleWidth(l)).toBeLessThanOrEqual(12);
+	});
+});
+
+describe("isEventKind — guard del wiring de emit (R14)", () => {
+	it("reconoce los 5 kinds del watcher y rechaza todo lo demás", () => {
+		for (const k of ["blocked", "settled", "interrupted", "stranded", "gone"] as EventKind[]) {
+			expect(isEventKind(k)).toBe(true);
+		}
+		for (const v of ["rearm", "", "BLOCKED", 42, undefined, null, {}, true] as unknown[]) {
+			expect(isEventKind(v)).toBe(false);
+		}
 	});
 });
 

@@ -28,12 +28,12 @@ import {
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
-import { loadDefaults, saveDefaults } from "./src/config.ts";
+import { loadDefaults, saveDefaults, BUILTIN } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
 import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
 import { DagrRecorder, NO_DAGR, stateDirOf, type DagrHook } from "./src/dagr.ts";
 import { composeFrom, findRoot, fsComposeIO } from "./src/dagrcompose.ts";
-import { Board, type BoardUi, type EventKind } from "./src/board.ts";
+import { Board, isEventKind, type BoardUi } from "./src/board.ts";
 import { basename, join } from "node:path";
 
 const DispatchParams = Type.Object(
@@ -119,9 +119,11 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
 		// spec 007 D1: el board cuelga del embudo único de eventos — consumidor
-		// pasivo y no-throw (R14); los eventos SIN agent (p.ej. re-arm) no lo tocan
-		if (typeof details.agent === "string" && typeof details.kind === "string") {
-			board.onEvent(details.agent, details.kind as EventKind, details.keepOpen === true);
+		// pasivo y no-throw (R14); isEventKind filtra kinds no reconocidos (el
+		// cast ciego dejaba mutar displays con cualquier string) y los eventos
+		// SIN agent (p.ej. re-arm) no lo tocan
+		if (typeof details.agent === "string" && isEventKind(details.kind)) {
+			board.onEvent(details.agent, details.kind, details.keepOpen === true);
 		}
 	};
 
@@ -422,8 +424,8 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		// hasUI (RPC lo encendería por accidente). INCONDICIONAL: sesiones frescas
 		// sin entries también arrancan el board; un fallo de reconcile no lo salta.
 		// D6: enabled inicial del fichero (defaults es el PARTIAL crudo: sin clave
-		// en disco es undefined → builtin "on"); los cambios viajan por onBoardChange.
-		board.setEnabled((loadDefaults(configPath).defaults.board ?? "on") === "on");
+		// en disco es undefined → builtin); los cambios viajan por onBoardChange.
+		board.setEnabled((loadDefaults(configPath).defaults.board ?? BUILTIN.board) === "on");
 		board.start(ctx?.mode === "tui" ? (ctx?.ui as BoardUi | undefined) : undefined);
 		void board.tick(); // D4: tick inmediato fija el estado real de los restaurados
 	});

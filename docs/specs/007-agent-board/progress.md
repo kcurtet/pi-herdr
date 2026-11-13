@@ -2,6 +2,12 @@
 
 Task 1: complete (commits dd18cb4, tests: npm test → 398 passed / 18 files, tsc --noEmit limpio)
 
+Review: SPEC-OK (revisor fresco) + Estándares 2 duros/4 judgement calls — fixes 1-4 aplicados, 2 minors diferidos.
+
+Minor diferido (a): especialización `key === "board"` en dos sitios de command.ts (saveValue y reset por-key) — reunirla en un onChange por key dentro de VALUE_SPECS sería Speculative Generality inversa para una sola clave con callback; coste de diferir: si llega una segunda clave con efecto de sesión, tocar 3 sitios en vez de 1.
+
+Minor diferido (b): `opts` de BoardUi.setWidget sin uso desde board.ts — se mantiene por fidelidad estructural al API real de pi (los fakes de test calcan la firma, así el wiring no miente sobre lo que acepta); candidata a poda futura si pi estabiliza la firma sin options.
+
 Task 7: complete (commits 4821a0f, tests: npm test → 447 passed / 19 files, npm run typecheck limpio; README con sección Agent board: estados evento/tick, degradado, config board, nota solo-TUI)
 
 Plan completo (T1–T7): 7 commits de tarea + 7 chore(ledger). Sin pendientes.
