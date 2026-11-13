@@ -2,6 +2,10 @@
 
 Task 1: complete (commits dd18cb4, tests: npm test → 398 passed / 18 files, tsc --noEmit limpio)
 
+Task 7: complete (commits 4821a0f, tests: npm test → 447 passed / 19 files, npm run typecheck limpio; README con sección Agent board: estados evento/tick, degradado, config board, nota solo-TUI)
+
+Plan completo (T1–T7): 7 commits de tarea + 7 chore(ledger). Sin pendientes.
+
 Task 6: complete (commits 1e9ca86, tests: npm test → 447 passed / 19 files, tsc --noEmit limpio)
 
 Ruling: T6 rompe un TERCER pin que el plan no listaba — tests/piargs.test.ts helper r() construye un ResolvedDefaults literal y gana `board: "on"`; actualizado con el mismo rationale que el pin mergeInput-builtin (board viaja por el pipeline de defaults); coste si me equivoco: ninguno, es el mismo patrón.
