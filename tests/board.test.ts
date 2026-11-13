@@ -387,9 +387,31 @@ describe("Board — clase + componente (D1, D4, D5, D7; R1–R6, R11–R14)", ()
 		})());
 		const factories = widgets.filter((w) => w.id === WIDGET_ID && typeof w.content === "function");
 		expect(factories).toHaveLength(2); // registro + re-registro
+		const compG = (factories[1]!.content as WidgetFactory)({ requestRender() {} }, plainTheme);
+		expect(compG.render(80)[0]).toContain("b · WORKING 0m");
+		expect(compG.render(80)[0]).not.toContain("a ·");
+		board.dispose();
+	});
+
+	it("setEnabled(false) sobre un Board vivo → clear widget + timer off; re-enable re-registra (R10, D6)", async () => {
+		const statusCalls: string[] = [];
+		const { registry, board } = makeBoard({ status: async (a) => (statusCalls.push(a), "working") });
+		const { ui, widgets } = fakeUi();
+		board.start(ui);
+		dispatchB(registry, board, { agent: "a" });
+		expect(widgets.some((w) => w.id === WIDGET_ID && typeof w.content === "function")).toBe(true);
+
+		board.setEnabled(false); // /herdr config board off en caliente
+		expect(widgets.some((w) => w.id === WIDGET_ID && w.content === undefined)).toBe(true);
+		const calls = statusCalls.length;
+		await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+		expect(statusCalls.length).toBe(calls); // timer parado
+
+		board.setEnabled(true); // /herdr config board on: reaparición
+		const factories = widgets.filter((w) => w.id === WIDGET_ID && typeof w.content === "function");
+		expect(factories).toHaveLength(2); // re-registro
 		const comp = (factories[1]!.content as WidgetFactory)({ requestRender() {} }, plainTheme);
-		expect(comp.render(80)[0]).toContain("b · WORKING 0m");
-		expect(comp.render(80)[0]).not.toContain("a ·");
+		expect(comp.render(80)[0]).toContain("a · WORKING");
 		board.dispose();
 	});
 });

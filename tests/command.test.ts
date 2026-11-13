@@ -15,6 +15,7 @@ function setup(saved: DispatchDefaults = {}, options?: { skillNames?: string[]; 
 	tmpDirs.push(base);
 	const configPath = join(base, "pi-herdr.json");
 	saveDefaults(configPath, saved);
+	const boardChanges: ("on" | "off")[] = [];
 	const deps = {
 		configPath,
 		load: () => loadDefaults(configPath),
@@ -22,6 +23,7 @@ function setup(saved: DispatchDefaults = {}, options?: { skillNames?: string[]; 
 		skillNames: () => options?.skillNames ?? ["writing-specs", "triage"],
 		extNames: () => options?.extNames ?? ["pi-monitor"],
 		kinds: ["pi", "claude", "codex"],
+		onBoardChange: (v: "on" | "off") => boardChanges.push(v),
 	};
 	const cmd = makeHerdrCommand(deps);
 	const notifies: { msg: string; level: string }[] = [];
@@ -38,7 +40,7 @@ function setup(saved: DispatchDefaults = {}, options?: { skillNames?: string[]; 
 			},
 		},
 	};
-	return { cmd, ctx, notifies, configPath, setQueue: (q: string[]) => (queue = q), selects };
+	return { cmd, ctx, notifies, configPath, setQueue: (q: string[]) => (queue = q), selects, boardChanges };
 }
 
 const read = (p: string): DispatchDefaults =>
@@ -170,7 +172,7 @@ describe("completions", () => {
 	it("posición 1: keys para config y reset", () => {
 		const { cmd } = setup();
 		const vals = (p: string) => (cmd.completions(p) ?? []).map((i) => i.value);
-		expect(vals("config ")).toEqual(["skills ", "extensions ", "topology ", "kind ", "keepOpen ", "worktree "]);
+		expect(vals("config ")).toEqual(["skills ", "extensions ", "topology ", "kind ", "keepOpen ", "worktree ", "board "]);
 		expect(vals("config sk")).toEqual(["skills "]);
 		expect(vals("reset sk")).toEqual(["skills "]);
 	});
@@ -192,5 +194,39 @@ describe("/herdr bare — flags dagr readonly (spec 005 D5)", () => {
 		const msg = s.notifies[0]!.msg;
 		expect(msg).toMatch(/herdr_dagr\s+true \(builtin\)/);
 		expect(msg).toMatch(/herdr_dagr_children\s+true \(builtin\)/);
+	});
+});
+
+describe("/herdr config board (spec 007 D6)", () => {
+	it("config board off → persiste y llama onBoardChange(off)", async () => {
+		const { cmd, ctx, configPath, boardChanges } = setup();
+		await cmd.handler("config board off", ctx);
+		expect(read(configPath)).toEqual({ board: "off" });
+		expect(boardChanges).toEqual(["off"]);
+	});
+
+	it("reset board → onBoardChange(on); reset total también (vuelta a builtin)", async () => {
+		const { cmd, ctx, boardChanges } = setup({ board: "off" });
+		await cmd.handler("reset board", ctx);
+		expect(boardChanges).toEqual(["on"]);
+		await cmd.handler("reset", ctx);
+		expect(boardChanges).toEqual(["on", "on"]);
+	});
+
+	it("valor inválido → error y sin cambio ni callback", async () => {
+		const { cmd, ctx, configPath, notifies, boardChanges } = setup();
+		await cmd.handler("config board si", ctx);
+		expect(read(configPath)).toEqual({});
+		expect(boardChanges).toEqual([]);
+		expect(notifies.some((n) => n.level === "error")).toBe(true);
+	});
+
+	it("wizard lista board con opciones on | off", async () => {
+		const { cmd, ctx, configPath, setQueue } = setup();
+		// el select fake solo devuelve valores PRESENTES en los items: si "board"
+		// no está en las keys o "off" no en sus opciones, no persiste nada
+		setQueue(["board", "off", "Done"]);
+		await cmd.handler("config", ctx);
+		expect(read(configPath)).toEqual({ board: "off" });
 	});
 });

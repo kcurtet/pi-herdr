@@ -12,6 +12,9 @@ export interface DispatchDefaults {
 	kind?: string;
 	keepOpen?: boolean;
 	worktree?: boolean;
+	/** Spec 007 D6: widget de subagentes on|off — viaja por el pipeline de
+	 * defaults aunque dispatch no lo consuma (letra de la spec). */
+	board?: "on" | "off";
 }
 
 /** Resultado del merge: TODOS los keys resueltos (builtin incluido). */
@@ -22,6 +25,7 @@ export interface ResolvedDefaults {
 	kind: string;
 	keepOpen: boolean;
 	worktree: boolean;
+	board: "on" | "off";
 }
 
 export const BUILTIN: ResolvedDefaults = {
@@ -31,6 +35,7 @@ export const BUILTIN: ResolvedDefaults = {
 	kind: "pi",
 	keepOpen: false,
 	worktree: false,
+	board: "on",
 };
 
 export const TOPOLOGIES = ["tab", "pane", "workspace"] as const;
@@ -61,6 +66,9 @@ function validate(raw: unknown): { defaults: DispatchDefaults; warnings: string[
 		if (typeof v === "boolean") out[key] = v;
 		else warnings.push(`${key}: valor no válido (${JSON.stringify(v)}) — se ignora`);
 	}
+	// spec 007 D6: board on|off (mismo patrón que worktree, parse on/off)
+	if (d.board === "on" || d.board === "off") out.board = d.board;
+	else if (d.board !== undefined) warnings.push(`board: valor no válido (${JSON.stringify(d.board)}) — se ignora`);
 	return { defaults: out, warnings };
 }
 

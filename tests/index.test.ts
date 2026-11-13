@@ -688,6 +688,58 @@ describe("session_start — recorder dagr (spec 005)", () => {
 				});
 			});
 		});
+
+		it("config board off en fichero → enabled inicial off: dispatch sin widget; on en caliente lo re-enciende (R10, D6)", async () => {
+			await withHerdrEnv(async () => {
+				// PI_HOME con board:off YA en disco — el enabled inicial sale del partial crudo
+				await withIsolatedPiHome(JSON.stringify({ defaults: { board: "off" } }), async () => {
+					const { api, tools, handlers, commands } = fakeApi();
+					const { run } = fakeRun(dispatchRoutes);
+					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+					const widgets: { id: string; content: unknown }[] = [];
+					await startAll(handlers, {
+						mode: "tui",
+						sessionManager: { getBranch: () => [] },
+						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
+					});
+					const t = tools.find((x) => x.name === "herdr_dispatch")!;
+					await t.execute!("c1", { task: "revisa el login" });
+					expect(widgets).toHaveLength(0); // board off: sin widget
+					// /herdr config board on en caliente (comando real de la factory)
+					const cmd = commands.find((c) => c.name === "herdr")!;
+					await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board on", {
+						hasUI: false,
+						ui: { notify: () => {}, select: async () => undefined },
+					});
+					await t.execute!("c2", { task: "arregla el pago" });
+					expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
+				});
+			});
+		});
+
+		it("/herdr config board off con sesión TUI viva → clear inmediato del widget (R10)", async () => {
+			await withHerdrEnv(async () => {
+				await withIsolatedPiHome(JSON.stringify({ defaults: {} }), async () => {
+					const { api, tools, handlers, commands } = fakeApi();
+					const { run } = fakeRun(dispatchRoutes);
+					extension(api as never, { run, spawnWait: idleChild, getConfig: () => ({}) });
+					const widgets: { id: string; content: unknown }[] = [];
+					await startAll(handlers, {
+						mode: "tui",
+						sessionManager: { getBranch: () => [] },
+						ui: { setWidget: (id: string, content: unknown) => widgets.push({ id, content }), notify: () => {} },
+					});
+					const t = tools.find((x) => x.name === "herdr_dispatch")!;
+					await t.execute!("c1", { task: "revisa el login" });
+					expect(widgets.some((w) => w.id === "herdr-board" && typeof w.content === "function")).toBe(true);
+					const cmd = commands.find((c) => c.name === "herdr")!;
+					await (cmd.handler as (args: string, ctx: unknown) => Promise<void>)("config board off", {
+						hasUI: false,
+						ui: { notify: () => {}, select: async () => undefined },
+					});
+					expect(widgets.some((w) => w.id === "herdr-board" && w.content === undefined)).toBe(true);
+				});
+			});
+		});
 	});
 });
-

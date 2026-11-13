@@ -421,6 +421,9 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		// spec 007 D7: SOLO TUI — el guard de modo vive aquí (call-site), jamás
 		// hasUI (RPC lo encendería por accidente). INCONDICIONAL: sesiones frescas
 		// sin entries también arrancan el board; un fallo de reconcile no lo salta.
+		// D6: enabled inicial del fichero (defaults es el PARTIAL crudo: sin clave
+		// en disco es undefined → builtin "on"); los cambios viajan por onBoardChange.
+		board.setEnabled((loadDefaults(configPath).defaults.board ?? "on") === "on");
 		board.start(ctx?.mode === "tui" ? (ctx?.ui as BoardUi | undefined) : undefined);
 		void board.tick(); // D4: tick inmediato fija el estado real de los restaurados
 	});
@@ -440,6 +443,8 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		skillNames: () => listSkillNames(resourceDirs),
 		extNames: () => listExtNames(resourceDirs),
 		kinds: ["pi", "claude", "codex", "gemini", "cursor"],
+		// spec 007 D6/R10: config board on|off surte en la sesión viva
+		onBoardChange: (v) => board.setEnabled(v === "on"),
 	});
 	pi.registerCommand("herdr", {
 		description: "Defaults de herdr_dispatch: /herdr [config <key> <valor> | reset [key]]",
