@@ -6,6 +6,7 @@
  * wiring llegan en la tarea 4; aquí viven las puras.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { DispatchRecord, Registry } from "./registry.ts";
 
 /** Estado display de una línea del board (D2). */
 export type BoardDisplay = "working" | "blocked" | "idle" | "interrupted" | "stranded";
@@ -187,4 +188,293 @@ export function composeBoard(
 	const shown = lines.slice(0, maxLines).map((l) => composeLine(l, width, now, paint));
 	const rest = lines.length - shown.length;
 	return rest > 0 ? [...shown, `+${rest} más`] : shown;
+}
+
+/** Id del widget del board sobre el editor (setWidget/clear, D1). */
+export const WIDGET_ID = "herdr-board";
+
+/** Subset de tui que el board necesita (structural) — board.ts no importa la
+ * API de pi: los seams llegan tipados mínimos y los tests los finge. */
+export interface BoardTui {
+	requestRender(): void;
+}
+
+/** Subset de theme para el paint productivo (D3): fg(token, texto) → ANSI. */
+export interface BoardTheme {
+	fg(color: string, text: string): string;
+}
+
+/** Subset de la UI de pi que el board consume (D7): fire-and-forget. */
+export interface BoardUi {
+	setWidget(id: string, content: unknown, opts?: { placement?: string }): void;
+	notify(msg: string, level: "info" | "warning" | "error"): void;
+}
+
+/** Subset que dispatch.ts necesita — Board lo implementa (seam de wiring). */
+export interface BoardEvents {
+	onDispatched(rec: DispatchRecord): void;
+	onEvent(agent: string, kind: EventKind, keepOpen?: boolean): void;
+	refresh(): void;
+}
+
+export interface BoardDeps {
+	registry: Registry;
+	/** DERIVADO de safeAgentStatus en el wiring (index.ts): adaptador explícito
+	 * — pasarla parcializada cruda rompería el reconcile en silencio. */
+	status: (agent: string) => Promise<string | undefined>;
+	/** default Date.now (seam de tests). */
+	now?: () => number;
+	/** default 30_000 (spec D4). */
+	intervalMs?: number;
+	/** default 5 (spec D8). */
+	maxLines?: number;
+}
+
+/** Componente custom del widget (D3): render(width) compone y cachea por
+ * (width, versión); invalidate() limpia el cache y las mutaciones piden
+ * tui.requestRender() (coalescido por pi) para no repintar en vano. */
+export class BoardComponent {
+	private readonly cache = new Map<string, string[]>();
+	private version = 0;
+
+	constructor(
+		private readonly lines: () => BoardLine[],
+		private readonly now: () => number,
+		private readonly paint?: PaintFn,
+		private readonly maxLines: number = 5,
+	) {}
+
+	render(width: number): string[] {
+		try {
+			const key = `${this.version}:${width}`;
+			const hit = this.cache.get(key);
+			if (hit !== undefined) return hit;
+			const out = composeBoard(this.lines(), width, this.now(), this.maxLines, this.paint);
+			this.cache.set(key, out);
+			return out;
+		} catch {
+			return []; // R14: un fallo de render jamás tumba el render loop de pi
+		}
+	}
+
+	invalidate(): void {
+		this.version++;
+		this.cache.clear();
+	}
+}
+
+interface DisplayEntry {
+	display: BoardDisplay;
+	since: number;
+}
+
+/**
+ * Board (D1): consumidor pasivo del embudo existente. Membresía = records
+ * live del registry (orden createdAt); estado display = eventos del watcher
+ * (onEvent) reconciliado por el tick (applyTickStatus). TODO método público
+ * envuelve su cuerpo en try/catch silencioso (R14): el board es cosmético y
+ * jamás propaga a dispatch/watch/settle. Guard de modo en el call-site
+ * (D7/R11): ui===undefined ⇒ desactivado — sin widget, sin timer, sin toasts.
+ */
+export class Board implements BoardEvents {
+	private readonly nowFn: () => number;
+	private readonly intervalMs: number;
+	private readonly maxLines: number;
+	private readonly displays = new Map<string, DisplayEntry>();
+	private ui: BoardUi | undefined;
+	private enabled = true;
+	private timer: ReturnType<typeof setInterval> | undefined;
+	private widgetActive = false;
+	private component: BoardComponent | undefined;
+	private requestRender: (() => void) | undefined;
+
+	constructor(private readonly deps: BoardDeps) {
+		this.nowFn = deps.now ?? Date.now;
+		this.intervalMs = deps.intervalMs ?? 30_000;
+		this.maxLines = deps.maxLines ?? 5;
+	}
+
+	/** Activación en session_start: ui===undefined (fuera de TUI) desactiva. */
+	start(ui: BoardUi | undefined): void {
+		try {
+			this.ui = ui;
+			if (ui === undefined) {
+				this.stopTimer();
+				this.clearWidget();
+				return;
+			}
+			this.refresh();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** /herdr config board off|on en caliente (D6/R10): clear/stop inmediato. */
+	setEnabled(on: boolean): void {
+		try {
+			this.enabled = on;
+			if (on) {
+				this.refresh();
+				return;
+			}
+			this.stopTimer();
+			this.clearWidget();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** Dispatch resuelto (R1): línea WORKING 0m al instante, sin esperar evento. */
+	onDispatched(rec: DispatchRecord): void {
+		try {
+			this.displays.set(rec.agent, { display: "working", since: this.nowFn() });
+			this.refresh();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** Evento del watcher vía emit (D2/D5): display + toast blocked + refresh. */
+	onEvent(agent: string, kind: EventKind, keepOpen?: boolean): void {
+		try {
+			const display = displayFromEvent(kind, keepOpen);
+			if (display === undefined) {
+				// settled sin keepOpen / gone: el record se cierra fuera (settle/
+				// stop) — la línea cae por membresía; soltar el display del map
+				this.displays.delete(agent);
+			} else {
+				const prev = this.displays.get(agent);
+				// D11: since resetea SOLO en transición real (mismo display = sigue contando)
+				if (prev === undefined || prev.display !== display) {
+					this.displays.set(agent, { display, since: this.nowFn() });
+				}
+			}
+			if (kind === "blocked" && this.enabled && this.ui !== undefined) {
+				this.ui.notify(`herdr: ${agent} BLOCKED — decisión pendiente en su pane`, "warning");
+			}
+			this.refresh();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** Membresía = records live; render o clear; timer on/off (D4). */
+	refresh(): void {
+		try {
+			const now = this.nowFn();
+			const live = this.liveRecords();
+			// higiene: displays de agentes que ya no están live no viven para siempre
+			for (const name of [...this.displays.keys()]) {
+				if (!live.some((r) => r.agent === name)) this.displays.delete(name);
+			}
+			if (!this.enabled || this.ui === undefined || live.length === 0) {
+				this.stopTimer();
+				this.component?.invalidate(); // ANTES de clearWidget: este suelta la ref
+				this.clearWidget();
+				return;
+			}
+			// R13: restaurados sin entrada (resume) arrancan WORKING, since = ahora
+			for (const r of live) {
+				if (!this.displays.has(r.agent)) this.displays.set(r.agent, { display: "working", since: now });
+			}
+			this.ensureWidget();
+			this.ensureTimer();
+			this.component?.invalidate();
+			this.requestRender?.();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/**
+	 * Tick 30s (D4). No-op desactivado o sin ui (R11: un resume headless jamás
+	 * lanza `herdr agent get`). La mitad reconciler (vía deps.status) llega en
+	 * la tarea 5; aquí solo refresca elapsed.
+	 */
+	async tick(): Promise<void> {
+		try {
+			if (!this.enabled || this.ui === undefined) return;
+			this.refresh();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** session_shutdown (R12): timer off + clear widget + estado suelto. */
+	dispose(): void {
+		try {
+			this.stopTimer();
+			this.clearWidget();
+			this.displays.clear();
+		} catch {
+			/* R14 */
+		}
+	}
+
+	/** Records live ordenados por createdAt (D8): el orden lo decide el board. */
+	private liveRecords(): DispatchRecord[] {
+		return this.deps.registry
+			.list()
+			.filter((r) => r.status === "live")
+			.sort((a, b) => a.createdAt - b.createdAt);
+	}
+
+	/** Líneas del render: TODO del record (D9) — display/since del map. */
+	private lines(): BoardLine[] {
+		const now = this.nowFn();
+		return this.liveRecords().map((r) => ({
+			name: r.agent,
+			display: this.displays.get(r.agent)?.display ?? "working",
+			since: this.displays.get(r.agent)?.since ?? now,
+			kind: r.kind,
+			branch: r.worktree?.branch,
+			task: r.task,
+		}));
+	}
+
+	/** Registro del widget UNA vez por período no-vacío (D3): tras un clear y
+	 * reaparición de líneas (o re-enable) se re-registra. La factory captura
+	 * tui.requestRender (seam de repintado entre renders del mismo período). */
+	private ensureWidget(): void {
+		if (this.widgetActive || this.ui === undefined) return;
+		const board = this;
+		this.ui.setWidget(WIDGET_ID, (tui: BoardTui, theme: BoardTheme) => {
+			board.requestRender = () => tui.requestRender();
+			const comp = new BoardComponent(() => board.lines(), board.nowFn, board.paintFor(theme), board.maxLines);
+			board.component = comp;
+			return comp;
+		});
+		this.widgetActive = true;
+	}
+
+	/** Paint productivo (D3): accent=working, warning=blocked, dim=idle,
+	 * error=interrupted/stranded — re-aplicado por línea (pi resetea estilos). */
+	private paintFor(theme: BoardTheme): PaintFn {
+		return (status, text) =>
+			theme.fg(
+				status === "working" ? "accent" : status === "blocked" ? "warning" : status === "idle" ? "dim" : "error",
+				text,
+			);
+	}
+
+	private clearWidget(): void {
+		if (!this.widgetActive) return;
+		this.ui?.setWidget(WIDGET_ID, undefined);
+		this.widgetActive = false;
+		this.component = undefined;
+		this.requestRender = undefined;
+	}
+
+	/** Timer solo con board vivo (anti-zombie): 0→≥1 live arranca, vaciar para. */
+	private ensureTimer(): void {
+		if (this.timer !== undefined) return;
+		this.timer = setInterval(() => void this.tick(), this.intervalMs);
+		this.timer.unref(); // R12: el tick jamás sujeta el proceso
+	}
+
+	private stopTimer(): void {
+		if (this.timer === undefined) return;
+		clearInterval(this.timer);
+		this.timer = undefined;
+	}
 }

@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { applyTickStatus, composeBoard, composeLine, displayFromEvent, formatElapsed, type BoardLine } from "../src/board.ts";
+import { Registry, type DispatchRecord } from "../src/registry.ts";
+import {
+	applyTickStatus,
+	Board,
+	BoardComponent,
+	composeBoard,
+	composeLine,
+	displayFromEvent,
+	formatElapsed,
+	WIDGET_ID,
+	type BoardDisplay,
+	type BoardLine,
+	type BoardUi,
+	type EventKind,
+} from "../src/board.ts";
 
 describe("displayFromEvent — evento → estado display (D2)", () => {
 	it("blocked → BLOCKED (decisión humana pendiente)", () => {
@@ -200,5 +214,181 @@ describe("formatElapsed — tiempo en el estado actual (D11)", () => {
 		expect(formatElapsed(60 * 60_000)).toBe("1h00m");
 		expect(formatElapsed(64 * 60_000)).toBe("1h04m");
 		expect(formatElapsed(125 * 60_000)).toBe("2h05m");
+	});
+});
+
+describe("Board — clase + componente (D1, D4, D5, D7; R1–R6, R11–R14)", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	const INTERVAL = 100;
+	type WidgetFactory = (tui: { requestRender(): void }, theme: { fg(c: string, t: string): string }) => BoardComponent;
+	const plainTheme = { fg: (_c: string, t: string) => t };
+
+	function recB(over: Partial<DispatchRecord> = {}): DispatchRecord {
+		return {
+			agent: "impl-x",
+			taskId: "hd-1",
+			topology: "tab",
+			targetId: "w4:t4K",
+			paneId: "w4:p4M",
+			cwd: "/repo",
+			keepOpen: false,
+			createdAt: 1_000,
+			status: "live",
+			task: "revisa el login del admin",
+			kind: "pi",
+			...over,
+		};
+	}
+
+	function fakeUi() {
+		const widgets: { id: string; content: unknown }[] = [];
+		const notifies: { msg: string; level: string }[] = [];
+		const ui: BoardUi = {
+			setWidget: (id, content) => widgets.push({ id, content }),
+			notify: (msg, level) => notifies.push({ msg, level }),
+		};
+		return { ui, widgets, notifies };
+	}
+
+	function makeBoard(o: { status?: (a: string) => Promise<string | undefined> } = {}) {
+		const registry = new Registry();
+		let clock = 1_000_000;
+		const board = new Board({
+			registry,
+			status: o.status ?? (async () => undefined),
+			now: () => clock,
+			intervalMs: INTERVAL,
+		});
+		return { registry, board, advance: (ms: number) => (clock += ms) };
+	}
+
+	/** Replica el orden del wiring real (dispatch.ts): registry.add(rec) ANTES
+	 * de board.onDispatched(rec) — la membresía del board sale del registry. */
+	function dispatchB(registry: Registry, board: Board, over: Partial<DispatchRecord> = {}): DispatchRecord {
+		const r = recB(over);
+		registry.add(r);
+		board.onDispatched(r);
+		return r;
+	}
+
+	it("(a) onDispatched → setWidget registrado y la línea WORKING 0m aparece en render(80) (R1)", () => {
+		const { registry, board } = makeBoard();
+		const { ui, widgets } = fakeUi();
+		board.start(ui);
+		expect(widgets).toHaveLength(0); // start con 0 líneas NO registra widget vacío
+		dispatchB(registry, board, { agent: "impl-x" });
+		const registered = widgets.filter((w) => w.id === WIDGET_ID && typeof w.content === "function");
+		expect(registered).toHaveLength(1);
+		const comp = (registered[0]!.content as WidgetFactory)({ requestRender() {} }, plainTheme);
+		expect(comp.render(80)[0]).toContain("impl-x · WORKING 0m");
+		board.dispose();
+	});
+
+	it("(b) onEvent blocked → display BLOCKED + UN toast warning (R2, D5)", () => {
+		const { registry, board } = makeBoard();
+		const { ui, widgets, notifies } = fakeUi();
+		board.start(ui);
+		dispatchB(registry, board, { agent: "a" });
+		board.onEvent("a", "blocked");
+		const comp = (widgets.find((w) => w.id === WIDGET_ID && typeof w.content === "function")!.content as WidgetFactory)(
+			{ requestRender() {} },
+			plainTheme,
+		);
+		expect(comp.render(80)[0]).toContain("a · BLOCKED 0m");
+		expect(notifies).toHaveLength(1);
+		expect(notifies[0]!.msg).toBe("herdr: a BLOCKED — decisión pendiente en su pane");
+		expect(notifies[0]!.level).toBe("warning");
+		board.dispose();
+	});
+
+	it("(c) record closed + refresh → línea fuera; último live → setWidget(herdr-board, undefined) y timer parado (R3, D4)", async () => {
+		const { registry, board } = makeBoard();
+		const { ui, widgets } = fakeUi();
+		let renderRequests = 0;
+		board.start(ui);
+		dispatchB(registry, board, { agent: "a" });
+		const factory = widgets.find((w) => w.id === WIDGET_ID && typeof w.content === "function")!.content as WidgetFactory;
+		const comp = factory({ requestRender: () => renderRequests++ }, plainTheme);
+		expect(comp.render(80).join("\n")).toContain("a · WORKING");
+
+		registry.markClosed("a");
+		board.refresh();
+		expect(widgets.some((w) => w.id === WIDGET_ID && w.content === undefined)).toBe(true);
+		expect(comp.render(80)).toEqual([]); // la línea ya no está
+		const reqs = renderRequests;
+		await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+		expect(renderRequests).toBe(reqs); // timer parado: ningún tick más pinta
+	});
+
+	it("(d) start(undefined) → NADA: sin setWidget, sin notify, sin efecto de timer (R11, D7)", async () => {
+		const statusCalls: string[] = [];
+		const { registry, board } = makeBoard({ status: async (a) => (statusCalls.push(a), "working") });
+		const { ui, widgets, notifies } = fakeUi();
+		board.start(undefined);
+		dispatchB(registry, board, { agent: "a" });
+		board.onEvent("a", "blocked");
+		await board.tick();
+		await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+		expect(widgets).toHaveLength(0);
+		expect(notifies).toHaveLength(0);
+		expect(statusCalls).toHaveLength(0); // un resume headless jamás lanza herdr agent get
+	});
+
+	it("(e) dispose → clear del widget + timer off (R12)", async () => {
+		const { registry, board } = makeBoard();
+		const { ui, widgets } = fakeUi();
+		let renderRequests = 0;
+		board.start(ui);
+		dispatchB(registry, board, { agent: "a" });
+		(widgets.find((w) => w.id === WIDGET_ID && typeof w.content === "function")!.content as WidgetFactory)(
+			{ requestRender: () => renderRequests++ },
+			plainTheme,
+		);
+		board.dispose();
+		expect(widgets.some((w) => w.id === WIDGET_ID && w.content === undefined)).toBe(true);
+		const reqs = renderRequests;
+		await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+		expect(renderRequests).toBe(reqs);
+	});
+
+	it("(f) ui que lanza: onEvent/onDispatched/start/tick NO propagan (R14)", async () => {
+		const { registry, board } = makeBoard();
+		const boom: BoardUi = {
+			setWidget() {
+				throw new Error("widget-boom");
+			},
+			notify() {
+				throw new Error("notify-boom");
+			},
+		};
+		expect(() => board.start(boom)).not.toThrow();
+		expect(() => board.onDispatched(recB({ agent: "a" }))).not.toThrow();
+		expect(() => board.onEvent("a", "blocked")).not.toThrow();
+		await expect(board.tick()).resolves.toBeUndefined();
+	});
+
+	it("(g) tras vaciar el board y re-despachar: el widget se RE-registra y vuelve a pintar (D4 registro por período)", () => {
+		const { registry, board } = makeBoard();
+		const { ui, widgets } = fakeUi();
+		board.start(ui);
+		dispatchB(registry, board, { agent: "a", task: "tarea uno" });
+		registry.markClosed("a");
+		board.refresh(); // board vacío → clear
+		expect(widgets.some((w) => w.id === WIDGET_ID && w.content === undefined)).toBe(true);
+
+		board.onDispatched(((): DispatchRecord => {
+			// re-despacho b: add al registry + onDispatched (orden del wiring)
+			const r = recB({ agent: "b", task: "tarea dos", createdAt: 2_000 });
+			registry.add(r);
+			return r;
+		})());
+		const factories = widgets.filter((w) => w.id === WIDGET_ID && typeof w.content === "function");
+		expect(factories).toHaveLength(2); // registro + re-registro
+		const comp = (factories[1]!.content as WidgetFactory)({ requestRender() {} }, plainTheme);
+		expect(comp.render(80)[0]).toContain("b · WORKING 0m");
+		expect(comp.render(80)[0]).not.toContain("a ·");
+		board.dispose();
 	});
 });
