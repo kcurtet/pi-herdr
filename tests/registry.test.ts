@@ -232,6 +232,25 @@ describe("abandonDispatch — flag close y orden de efectos (issue #10)", () => 
 	});
 });
 
+	describe("Registry.fromEntries — task/kind (spec 007 D9/R15)", () => {
+	it("entry CON task/kind los reconstruye: el board tras resume pinta línea completa", () => {
+		const r = Registry.fromEntries([
+			{ type: "custom", customType: "herdr-dispatch-record", data: rec({ agent: "a", task: "revisa el login del admin", kind: "pi" }) },
+		]);
+		expect(r.get("a")!.task).toBe("revisa el login del admin");
+		expect(r.get("a")!.kind).toBe("pi");
+	});
+
+	it("entry SIN task/kind (sesión pre-007) reconstruye sin error — línea degradada", () => {
+		const r = Registry.fromEntries([
+			{ type: "custom", customType: "herdr-dispatch-record", data: rec({ agent: "vieja", task: undefined, kind: undefined }) },
+		]);
+		expect(r.get("vieja")!.status).toBe("live");
+		expect(r.get("vieja")!.task).toBeUndefined();
+		expect(r.get("vieja")!.kind).toBeUndefined();
+	});
+});
+
 describe("grabado dagr en stop/reconcile/shutdown (spec 005 D0)", () => {
 	function dagrFake() {
 		const calls: { what: string; arg?: unknown }[] = [];

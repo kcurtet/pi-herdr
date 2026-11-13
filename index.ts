@@ -6,7 +6,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { localRun } from "./src/herdr.ts";
+import { localRun, safeAgentStatus } from "./src/herdr.ts";
 import {
 	dispatch,
 	dispatchReport,
@@ -28,11 +28,12 @@ import {
 } from "./src/registry.ts";
 import type { WatchHandle } from "./src/watch.ts";
 import { defaultResourceDirs, listExtNames, listSkillNames } from "./src/resources.ts";
-import { loadDefaults, saveDefaults } from "./src/config.ts";
+import { loadDefaults, saveDefaults, BUILTIN } from "./src/config.ts";
 import { makeHerdrCommand } from "./src/command.ts";
 import { formatByProject, groupByProject, listGlobal, listWorkspaces, scopeFrom, Watches } from "./src/global.ts";
 import { DagrRecorder, NO_DAGR, stateDirOf, type DagrHook } from "./src/dagr.ts";
 import { composeFrom, findRoot, fsComposeIO } from "./src/dagrcompose.ts";
+import { Board, isEventKind, type BoardUi } from "./src/board.ts";
 import { basename, join } from "node:path";
 
 const DispatchParams = Type.Object(
@@ -117,6 +118,13 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 
 	const emit: EmitFn = (content, details) => {
 		pi.sendMessage({ customType: "herdr-dispatch-event", content, display: true, details }, { triggerTurn: true });
+		// spec 007 D1: el board cuelga del embudo único de eventos — consumidor
+		// pasivo y no-throw (R14); isEventKind filtra kinds no reconocidos (el
+		// cast ciego dejaba mutar displays con cualquier string) y los eventos
+		// SIN agent (p.ej. re-arm) no lo tocan
+		if (typeof details.agent === "string" && isEventKind(details.kind)) {
+			board.onEvent(details.agent, details.kind, details.keepOpen === true);
+		}
 	};
 
 	const resourceDirs = defaultResourceDirs(process.env);
@@ -169,6 +177,13 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 	};
 
 	const run = inject?.run ?? localRun;
+	// spec 007: board persistente de subagentes. El adaptador de status es
+	// EXPLÍCITO (safeAgentStatus devuelve { status?, error? }): parcializarla
+	// cruda rompería el reconcile del tick en silencio.
+	const board = new Board({
+		registry,
+		status: async (agent) => (await safeAgentStatus(run, agent)).status,
+	});
 	const deps: DispatchDeps = {
 		run,
 		registry,
@@ -180,6 +195,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		getConfig: () => loadDefaults(configPath).defaults, // recargada por dispatch (R6)
 		watchers, // issue #17: herdr_prompt informa según vigilancia real del map
 		dagr: dagrHook,
+		board, // spec 007 R1: onDispatched justo tras registry.add
 		...inject,
 	};
 
@@ -273,6 +289,7 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
 		execute: async (_id, params) => {
 			const text = await stopDispatch({ run, registry, cleanupWorktree, watchers, dagr: dagrHook }, params.agent);
+			board.refresh(); // spec 007: la línea del cerrado sale del widget ya
 			return { content: [{ type: "text", text }], details: { agent: params.agent } };
 		},
 	});
@@ -403,9 +420,18 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 				});
 			}
 		}
+		// spec 007 D7: SOLO TUI — el guard de modo vive aquí (call-site), jamás
+		// hasUI (RPC lo encendería por accidente). INCONDICIONAL: sesiones frescas
+		// sin entries también arrancan el board; un fallo de reconcile no lo salta.
+		// D6: enabled inicial del fichero (defaults es el PARTIAL crudo: sin clave
+		// en disco es undefined → builtin); los cambios viajan por onBoardChange.
+		board.setEnabled((loadDefaults(configPath).defaults.board ?? BUILTIN.board) === "on");
+		board.start(ctx?.mode === "tui" ? (ctx?.ui as BoardUi | undefined) : undefined);
+		void board.tick(); // D4: tick inmediato fija el estado real de los restaurados
 	});
 
 	pi.on("session_shutdown", async () => {
+		board.dispose(); // spec 007 R12: timer off + widget limpio, junto al cleanup
 		watches.stopAll(); // spec 004 A6
 		await shutdownCleanup({ run, registry, cleanupWorktree, dagr: dagrHook });
 		await recorder?.flush(); // spec 005: drena la cola de writes del grafo
@@ -419,6 +445,8 @@ export default function herdrExtension(pi: ExtensionAPI, inject?: Partial<Dispat
 		skillNames: () => listSkillNames(resourceDirs),
 		extNames: () => listExtNames(resourceDirs),
 		kinds: ["pi", "claude", "codex", "gemini", "cursor"],
+		// spec 007 D6/R10: config board on|off surte en la sesión viva
+		onBoardChange: (v) => board.setEnabled(v === "on"),
 	});
 	pi.registerCommand("herdr", {
 		description: "Defaults de herdr_dispatch: /herdr [config <key> <valor> | reset [key]]",

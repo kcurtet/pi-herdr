@@ -26,6 +26,7 @@ import { type ResourceDirs } from "./resources.ts";
 import { buildPiArgs } from "./piargs.ts";
 import { mergeInput, type DispatchDefaults } from "./config.ts";
 import type { DagrHook } from "./dagr.ts";
+import type { BoardEvents } from "./board.ts";
 
 /** Umbral de presentación: desglosar la espera en cola del mutex solo si fue material. */
 const QUEUED_NOTE_THRESHOLD_MS = 1_000;
@@ -80,6 +81,9 @@ export interface DispatchDeps {
 	 * (reconcile fallido, I4 rev #13) no debe oír "el watcher activo notificará".
 	 * Ausente = asume vigilado (compat con seams de test sin wiring). */
 	watchers?: ReadonlyMap<string, WatchHandle>;
+	/** Board (spec 007): notifica el dispatch nada más registrar el record —
+	 * onDispatched es no-throw (R14), así que el dispatch no lo protege. */
+	board?: BoardEvents;
 }
 
 /** Evita pisar records del registry Y agentes vivos de herdr: sufijos -2..-99, error si agota. */
@@ -360,8 +364,15 @@ async function dispatchArmed(
 		createdAt: Date.now(),
 		status: "live",
 		piArgs,
+		// spec 007 D9: la task trimada y el kind efectivo viajan en el record para
+		// que el board pinta línea completa incluso tras resume (appendEntry spread)
+		task,
+		kind: effective.kind,
 	};
 	deps.registry.add(rec);
+	// spec 007 R1: línea WORKING 0m al instante — antes del arm para que el
+	// widget pinte aunque el watcher tarde en confirmar el arranque
+	deps.board?.onDispatched(rec);
 
 	deps.arm(
 		{ run: deps.run, spawnWait: deps.spawnWait },

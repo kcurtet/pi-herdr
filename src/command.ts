@@ -5,7 +5,7 @@
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { BUILTIN as DEFAULTS, TOPOLOGIES, loadRawDefaults, type DispatchDefaults, type DagrFlags } from "./config.ts";
 
-export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree"] as const;
+export const CONFIG_KEYS = ["skills", "extensions", "topology", "kind", "keepOpen", "worktree", "board"] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 /** Display del builtin por key, DERIVADO de config.ts (única fuente de verdad). */
@@ -20,6 +20,9 @@ export interface CommandDeps {
 	skillNames: () => string[];
 	extNames: () => string[];
 	kinds: string[];
+	/** Spec 007 D6: efecto inmediato del board en la sesión viva — llamado tras
+	 * saveValue("board", ...) y tras reset (por key y total → "on" builtin). */
+	onBoardChange?: (v: "on" | "off") => void;
 }
 
 export interface CommandCtxLike {
@@ -51,6 +54,10 @@ const parseListOrBool = (raw: string): boolean | string[] | undefined => {
 const parseBool = (raw: string): boolean | undefined =>
 	raw === "true" || raw === "false" ? raw === "true" : undefined;
 
+/** Spec 007 D6: board on|off — mismo patrón que parseBool para el enum propio. */
+const parseOnOff = (raw: string): "on" | "off" | undefined =>
+	raw === "on" || raw === "off" ? raw : undefined;
+
 /** Tabla por key: única fuente para parse y options (adiós switches paralelos). */
 const VALUE_SPECS: Record<ConfigKey, ValueSpec> = {
 	skills: { parse: parseListOrBool, options: (d) => ["true", "false", ...d.skillNames()] },
@@ -62,6 +69,7 @@ const VALUE_SPECS: Record<ConfigKey, ValueSpec> = {
 	kind: { parse: (raw) => (raw.length > 0 ? raw : undefined), options: (d) => [...d.kinds] },
 	keepOpen: { parse: parseBool, options: () => ["true", "false"] },
 	worktree: { parse: parseBool, options: () => ["true", "false"] },
+	board: { parse: parseOnOff, options: () => ["on", "off"] },
 };
 
 /** Key de config válido, o notify de error (reset y config comparten). */
@@ -87,6 +95,8 @@ function saveValue(
 	next[key] = value;
 	deps.save(next as DispatchDefaults);
 	ctx.ui.notify(`pi-herdr: ${key} = ${fmt(value)} (config)`, "info");
+	// spec 007 D6: el board es estado de SESIÓN — el cambio surte ya, no tras reiniciar
+	if (key === "board") deps.onBoardChange?.(value as "on" | "off");
 	warnIfUndispatchable(key, next, ctx);
 }
 
@@ -168,9 +178,11 @@ function makeHandler(deps: CommandDeps) {
 				delete next[key];
 				deps.save(next as DispatchDefaults);
 				ctx.ui.notify(`pi-herdr: ${parts[1]} vuelto a builtin`, "info");
+				if (key === "board") deps.onBoardChange?.("on"); // builtin = on (D6)
 			} else {
 				deps.save({});
 				ctx.ui.notify("pi-herdr: config vaciada (todo builtin)", "info");
+				deps.onBoardChange?.("on"); // reset total: TODAS las claves a builtin
 			}
 			return;
 		}

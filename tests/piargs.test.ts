@@ -40,6 +40,7 @@ function r(over: Partial<ResolvedDefaults>): ResolvedDefaults {
 		kind: "pi",
 		keepOpen: false,
 		worktree: false,
+		board: "on", // spec 007 D6: board viaja por el pipeline de defaults
 		...over,
 	};
 }

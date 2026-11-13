@@ -83,7 +83,7 @@ describe("saveDefaults / roundtrip", () => {
 describe("mergeInput — param > config > builtin", () => {
 	it("sin param ni config → builtin defaults", () => {
 		const r = mergeInput({}, {});
-		expect(r).toEqual({ skills: false, extensions: false, topology: "tab", kind: "pi", keepOpen: false, worktree: false });
+		expect(r).toEqual({ skills: false, extensions: false, topology: "tab", kind: "pi", keepOpen: false, worktree: false, board: "on" });
 	});
 	it("config llena keys sin param", () => {
 		const r = mergeInput({}, { skills: true, topology: "pane", worktree: true });
@@ -101,6 +101,24 @@ describe("mergeInput — param > config > builtin", () => {
 	it("param [] cuenta como explícito → false", () => {
 		const r = mergeInput({ skills: [] }, { skills: ["a"] });
 		expect(r.skills).toEqual([]);
+	});
+});
+
+describe("loadDefaults — board (spec 007 D6)", () => {
+	it("board on|off pasan; valor inválido → warning y descarte", () => {
+		const p = tmpPath();
+		writeFileSync(p, JSON.stringify({ defaults: { board: "off" } }));
+		expect(loadDefaults(p).defaults).toEqual({ board: "off" });
+		const p2 = tmpPath();
+		writeFileSync(p2, JSON.stringify({ defaults: { board: "si" } }));
+		const r = loadDefaults(p2);
+		expect(r.defaults).toEqual({});
+		expect(r.warnings.join(" ")).toMatch(/board/);
+	});
+
+	it("builtin board = \"on\" (D6 default); config pisa", () => {
+		expect(mergeInput({}, {}).board).toBe("on");
+		expect(mergeInput({}, { board: "off" }).board).toBe("off");
 	});
 });
 

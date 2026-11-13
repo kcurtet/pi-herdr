@@ -37,6 +37,36 @@ Los agentes ajenos son de **solo lectura + vigilancia**: nunca se cierran ni se 
 - **Resume/crash**: el registry se persiste en entries de sesión y `session_start` reconcilia contra `herdr agent list` — los agentes vivos recuperan watcher; los muertos se cierran (worktree pendiente se limpia una sola vez).
 - **Shutdown**: `session_shutdown` cierra todo lo vivo, idempotente.
 
+## Agent board (spec 007)
+
+Widget persistente **sobre el editor** con una línea por despacho live de la sesión: qué hay vivo, en qué estado está y cuánto lleva — de un vistazo, sin tool calls ni scroll. Actualización en dos vías: eventos del watcher (inmediata) + tick de 30s que re-verifica el estado real vía `herdr agent get` (cubre el prompt manual del humano en el pane, que no emite nada) y refresca el elapsed. `blocked` además avisa con un **toast** (`warning`, uno por evento — la decisión es humana y urgente).
+
+Línea completa, degradando por width de la terminal al estrechar (task → rama → kind → elapsed, suelo `name · STATUS` con el name truncado como último recurso — jamás desborda):
+
+```
+impl-login · WORKING 12m · pi · hd/impl-login · construye el login del admin…
+impl-review · BLOCKED 3m · pi · revisa el PR #42 con ojo en l…
+fix-payments · STRANDED 1h04m · fix del pago atrapado en rebase
+agente-6 · IDLE 22m · pi
+agente-7 · WORKING 5m · claude
++2 más
+```
+
+Cap de 5 líneas + `+k más` (orden por creación). Elapsed = tiempo **en el estado actual**: `BLOCKED 45m` es señal de alarma; cambia de estado → se reinicia el contador. Estados y su origen (los eventos del watcher SIEMPRE pisan al tick — el watcher es el dueño de la verdad, el tick es red de seguridad):
+
+| Display | Origen evento (watcher) | Origen tick (`agent get`) |
+|---|---|---|
+| `WORKING` | dispatch / settle suprimido re-trabajando | reconcilia libre (working/blocked/idle) |
+| `BLOCKED` | evento `blocked` (+ toast) | reconcilia libre |
+| `IDLE` | `settled` con `keepOpen: true` | reconcilia libre (R7: prompt manual lo levanta) |
+| `INTERRUPTED` | evento `interrupted` (grace, decide con `herdr_prompt`/`herdr_stop`) | sticky: solo puede levantarse a `WORKING` |
+| `STRANDED` | evento `stranded` (wait muerto, agente quizá vivo — decide con `herdr_stop`) | **intocable** por el tick |
+
+El settle sin `keepOpen` y `gone` no pintan estado: el despacho se cierra y la línea desaparece. Tras resume el board se repuebla desde los records restaurados (task/kind persisten en el registro) y arranca en `WORKING` hasta que un tick inmediato fija el estado real. Todo lo que pinta sale del registro — mismo board antes y después de un resume.
+
+- **Solo TUI**: el guard es `ctx.mode === "tui"` en el arranque — en `-p`, JSON o RPC no hay widget, ni timer, ni toasts (comportamiento idéntico a sin board). El board es cosmético y no-throw: ningún fallo suyo puede romper dispatch/watch/settle.
+- **Config**: `/herdr config board off` lo apaga en caliente (widget limpio + tick parado en la sesión viva); `on` (builtin) lo re-enciende. Sin despachos vivos el widget desaparece; `session_shutdown` para el tick y limpia.
+
 ## Skills y extensiones del agente despachado
 
 Por defecto el agente despachado arranca **limpio**: `--no-skills --no-extensions` (más `-e` automático para la integración de estado de herdr, que el watcher necesita). Control por dispatch:
@@ -57,7 +87,7 @@ Estilo turnkit: wizard + autocompletado + persistencia en `$PI_HOME/extensions-c
 /herdr reset [key]
 ```
 
-Los 6 defaults: `skills`, `extensions`, `topology`, `kind`, `keepOpen`, `worktree`. Jerarquía: **param de la tool > config > builtin**.
+Los defaults: `skills`, `extensions`, `topology`, `kind`, `keepOpen`, `worktree`, `board`. Jerarquía: **param de la tool > config > builtin**.
 
 ## Auto-dagr (spec 005)
 
