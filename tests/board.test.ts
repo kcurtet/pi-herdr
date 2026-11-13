@@ -217,40 +217,41 @@ describe("formatElapsed — tiempo en el estado actual (D11)", () => {
 	});
 });
 
+function recB(over: Partial<DispatchRecord> = {}): DispatchRecord {
+	return {
+		agent: "impl-x",
+		taskId: "hd-1",
+		topology: "tab",
+		targetId: "w4:t4K",
+		paneId: "w4:p4M",
+		cwd: "/repo",
+		keepOpen: false,
+		createdAt: 1_000,
+		status: "live",
+		task: "revisa el login del admin",
+		kind: "pi",
+		...over,
+	};
+}
+
+type WidgetFactory = (tui: { requestRender(): void }, theme: { fg(c: string, t: string): string }) => BoardComponent;
+const plainTheme = { fg: (_c: string, t: string) => t };
+
+function fakeUi() {
+	const widgets: { id: string; content: unknown }[] = [];
+	const notifies: { msg: string; level: string }[] = [];
+	const ui: BoardUi = {
+		setWidget: (id, content) => widgets.push({ id, content }),
+		notify: (msg, level) => notifies.push({ msg, level }),
+	};
+	return { ui, widgets, notifies };
+}
+
 describe("Board — clase + componente (D1, D4, D5, D7; R1–R6, R11–R14)", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
 	const INTERVAL = 100;
-	type WidgetFactory = (tui: { requestRender(): void }, theme: { fg(c: string, t: string): string }) => BoardComponent;
-	const plainTheme = { fg: (_c: string, t: string) => t };
-
-	function recB(over: Partial<DispatchRecord> = {}): DispatchRecord {
-		return {
-			agent: "impl-x",
-			taskId: "hd-1",
-			topology: "tab",
-			targetId: "w4:t4K",
-			paneId: "w4:p4M",
-			cwd: "/repo",
-			keepOpen: false,
-			createdAt: 1_000,
-			status: "live",
-			task: "revisa el login del admin",
-			kind: "pi",
-			...over,
-		};
-	}
-
-	function fakeUi() {
-		const widgets: { id: string; content: unknown }[] = [];
-		const notifies: { msg: string; level: string }[] = [];
-		const ui: BoardUi = {
-			setWidget: (id, content) => widgets.push({ id, content }),
-			notify: (msg, level) => notifies.push({ msg, level }),
-		};
-		return { ui, widgets, notifies };
-	}
 
 	function makeBoard(o: { status?: (a: string) => Promise<string | undefined> } = {}) {
 		const registry = new Registry();
@@ -390,5 +391,113 @@ describe("Board — clase + componente (D1, D4, D5, D7; R1–R6, R11–R14)", ()
 		expect(comp.render(80)[0]).toContain("b · WORKING 0m");
 		expect(comp.render(80)[0]).not.toContain("a ·");
 		board.dispose();
+	});
+});
+
+describe("Board.tick — reconciler de verdad (D4, D10; R6, R7, R13)", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	const INTERVAL = 100;
+	const MIN = 60_000;
+
+	function makeBoard(o: { status?: (a: string) => Promise<string | undefined> } = {}) {
+		const registry = new Registry();
+		let clock = 1_000_000;
+		const board = new Board({
+			registry,
+			status: o.status ?? (async () => undefined),
+			now: () => clock,
+			intervalMs: INTERVAL,
+		});
+		return {
+			registry,
+			board,
+			advance: (ms: number) => (clock += ms),
+			widgets: [] as { id: string; content: unknown }[],
+			ui: null as unknown as BoardUi,
+		};
+	}
+
+	/** Board + ui fake conectada; devuelve el componente (factory invocada como pi). */
+	function startedBoard(o: { status?: (a: string) => Promise<string | undefined> } = {}) {
+		const { ui, widgets } = fakeUi();
+		const ctx = makeBoard(o);
+		ctx.board.start(ui);
+		return { ...ctx, ui, widgets };
+	}
+	function dispatchB(registry: Registry, board: Board, over: Partial<DispatchRecord> = {}): DispatchRecord {
+		const r = recB(over);
+		registry.add(r);
+		board.onDispatched(r);
+		return r;
+	}
+	function compOf(widgets: { id: string; content: unknown }[]) {
+		const factory = widgets.find((w) => w.id === WIDGET_ID && typeof w.content === "function")!.content as WidgetFactory;
+		return factory({ requestRender() {} }, { fg: (_c: string, t: string) => t });
+	}
+
+	it("(a) entry IDLE (keepOpen) + status working → tras tick display WORKING y since RESETEADO (R7: prompt manual del pane)", async () => {
+		const ctx = startedBoard({ status: async () => "working" });
+		dispatchB(ctx.registry, ctx.board, { agent: "a" });
+		ctx.board.onEvent("a", "settled", true); // keepOpen → IDLE
+		const comp = compOf(ctx.widgets);
+		expect(comp.render(80)[0]).toContain("a · IDLE 0m");
+		ctx.advance(10 * MIN);
+		await ctx.board.tick();
+		ctx.advance(2 * MIN);
+		// working desde el tick: 2m — NO 12m (since reseteado en la transición, D11)
+		expect(comp.render(80)[0]).toContain("a · WORKING 2m");
+		ctx.board.dispose();
+	});
+
+	it("(b) entry STRANDED + status working → SIGUE stranded (R6/D10: intocable por el tick)", async () => {
+		const ctx = startedBoard({ status: async () => "working" });
+		dispatchB(ctx.registry, ctx.board, { agent: "a" });
+		ctx.board.onEvent("a", "stranded");
+		const comp = compOf(ctx.widgets);
+		await ctx.board.tick();
+		expect(comp.render(80)[0]).toContain("a · STRANDED");
+		ctx.board.dispose();
+	});
+
+	it("(c) status que REJECTA → mantiene el último display y tick() no lanza (R14, R13)", async () => {
+		const ctx = startedBoard({ status: async () => { throw new Error("herdr caído"); } });
+		dispatchB(ctx.registry, ctx.board, { agent: "a" });
+		ctx.board.onEvent("a", "blocked");
+		const comp = compOf(ctx.widgets);
+		await expect(ctx.board.tick()).resolves.toBeUndefined();
+		expect(comp.render(80)[0]).toContain("a · BLOCKED");
+		ctx.board.dispose();
+	});
+
+	it("(d) timer dispara tick() con ≥1 live y NO con 0 (D4 lazy: 0→≥1 arranca, vaciar para)", async () => {
+		const statusCalls: string[] = [];
+		const ctx = startedBoard({ status: async (a) => (statusCalls.push(a), "idle") });
+		// 0 live: el arranque NO arranca timer — ningún status tras 5 intervalos
+		await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+		expect(statusCalls).toHaveLength(0);
+		// ≥1 live: un tick por intervalo
+		dispatchB(ctx.registry, ctx.board, { agent: "a" });
+		await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+		expect(statusCalls).toEqual(["a", "a", "a"]);
+		// vacío de nuevo: timer parado
+		ctx.registry.markClosed("a");
+		ctx.board.refresh();
+		await vi.advanceTimersByTimeAsync(INTERVAL * 5);
+		expect(statusCalls).toHaveLength(3);
+		ctx.board.dispose();
+	});
+
+	it("restaurado sin entrada (resume, R13): tick fija el estado real reportado", async () => {
+		const ctx = startedBoard({ status: async () => "blocked" });
+		// record restaurado SIN onDispatched (como fromEntries+adopt tras resume)
+		ctx.registry.add(recB({ agent: "viejo" }));
+		ctx.board.refresh(); // siembra WORKING
+		const comp = compOf(ctx.widgets);
+		expect(comp.render(80)[0]).toContain("viejo · WORKING");
+		await ctx.board.tick();
+		expect(comp.render(80)[0]).toContain("viejo · BLOCKED");
+		ctx.board.dispose();
 	});
 });

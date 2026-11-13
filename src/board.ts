@@ -387,17 +387,34 @@ export class Board implements BoardEvents {
 	}
 
 	/**
-	 * Tick 30s (D4). No-op desactivado o sin ui (R11: un resume headless jamás
-	 * lanza `herdr agent get`). La mitad reconciler (vía deps.status) llega en
-	 * la tarea 5; aquí solo refresca elapsed.
+	 * Tick 30s (D4): reconciler de verdad. No-op desactivado o sin ui (R11:
+	 * un resume headless jamás lanza `herdr agent get`). Por cada record live,
+	 * deps.status en paralelo (best-effort — fallo = mantiene el último
+	 * estado); el resultado se aplica SOLO vía applyTickStatus (tabla D10) y
+	 * una transición resetea since (D11). El tick NUNCA escribe en registry ni
+	 * emite eventos: solo pinta. El tick inmediato de arranque lo dispara el
+	 * wiring de index.ts (void board.tick() tras start) — no se duplica aquí.
 	 */
 	async tick(): Promise<void> {
 		try {
 			if (!this.enabled || this.ui === undefined) return;
+			const live = this.liveRecords();
+			if (live.length > 0) {
+				const results = await Promise.allSettled(live.map((r) => this.deps.status(r.agent)));
+				live.forEach((r, i) => {
+					const res = results[i]!;
+					if (res.status !== "fulfilled" || res.value === undefined) return; // fallo/unknown: mantener
+					const current = this.displays.get(r.agent)?.display ?? "working";
+					const next = applyTickStatus(current, res.value);
+					if (next !== current) {
+						this.displays.set(r.agent, { display: next, since: this.nowFn() });
+					}
+				});
+			}
 			this.refresh();
 		} catch {
-			/* R14 */
-		}
+				/* R14 */
+			}
 	}
 
 	/** session_shutdown (R12): timer off + clear widget + estado suelto. */
